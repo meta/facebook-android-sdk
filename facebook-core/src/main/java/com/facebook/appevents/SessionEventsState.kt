@@ -167,7 +167,11 @@ internal class SessionEventsState(
         val requestParameters = request.parameters
         val jsonString = events.toString()
         requestParameters.putString("custom_events", jsonString)
-        if (isEnabled(FeatureManager.Feature.IapLoggingLib5To7)) {
+        // GPBL 5-7 and GPBL 8+ are independent rollout gates, and both produce operational data.
+        if (
+            isEnabled(FeatureManager.Feature.IapLoggingLib5To7) ||
+                isEnabled(FeatureManager.Feature.IapLoggingLib8Plus)
+        ) {
             requestParameters.putString("operational_parameters", operationalParameters.toString())
         }
         request.tag = jsonString

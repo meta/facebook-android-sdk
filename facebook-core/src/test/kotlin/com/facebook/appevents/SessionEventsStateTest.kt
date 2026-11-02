@@ -241,6 +241,8 @@ class SessionEventsStateTest : FacebookPowerMockTestCase() {
     fun `populate request without operational parameters`() {
         whenever(FeatureManager.isEnabled(FeatureManager.Feature.IapLoggingLib5To7))
             .thenReturn(false)
+        whenever(FeatureManager.isEnabled(FeatureManager.Feature.IapLoggingLib8Plus))
+            .thenReturn(false)
         sessionEventsState.addEvent(appEventWithOperationalData)
         val request = GraphRequest()
         val result = sessionEventsState.populateRequest(request, mock(), true, false)
@@ -249,8 +251,21 @@ class SessionEventsStateTest : FacebookPowerMockTestCase() {
     }
 
     @Test
-    fun `populate request with operational parameters`() {
+    fun `populate request with operational parameters for billing library v5 to v7`() {
         whenever(FeatureManager.isEnabled(FeatureManager.Feature.IapLoggingLib5To7))
+            .thenReturn(true)
+        sessionEventsState.addEvent(appEventWithOperationalData)
+        val request = GraphRequest()
+        val result = sessionEventsState.populateRequest(request, mock(), true, false)
+        assertEquals(1, result)
+        assertEquals(request.parameters.getCharSequence("operational_parameters"), "[{}]")
+    }
+
+    @Test
+    fun `populate request with operational parameters for billing library v8 plus`() {
+        whenever(FeatureManager.isEnabled(FeatureManager.Feature.IapLoggingLib5To7))
+            .thenReturn(false)
+        whenever(FeatureManager.isEnabled(FeatureManager.Feature.IapLoggingLib8Plus))
             .thenReturn(true)
         sessionEventsState.addEvent(appEventWithOperationalData)
         val request = GraphRequest()
