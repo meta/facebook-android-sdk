@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [19.0.1]
+
+### Fixed
+- Fixed support for in-app purchase events with Google Play Billing Library 8.
+
 ## [19.0.0]
 
 ### Added
@@ -564,7 +569,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <!-- Links -->
 
-[Unreleased]: https://github.com/meta/facebook-android-sdk/compare/sdk-version-19.0.0...HEAD
+[Unreleased]: https://github.com/meta/facebook-android-sdk/compare/sdk-version-19.0.1...HEAD
+[19.0.1]: https://github.com/meta/facebook-android-sdk/compare/sdk-version-19.0.0...sdk-version-19.0.1
 [19.0.0]: https://github.com/meta/facebook-android-sdk/compare/sdk-version-18.3.0...sdk-version-19.0.0
 [18.3.0]: https://github.com/meta/facebook-android-sdk/compare/sdk-version-18.2.3...sdk-version-18.3.0
 [18.2.3]: https://github.com/meta/facebook-android-sdk/compare/sdk-version-18.1.3...sdk-version-18.2.3
