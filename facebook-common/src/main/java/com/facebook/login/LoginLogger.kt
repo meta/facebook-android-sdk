@@ -111,10 +111,15 @@ internal class LoginLogger(context: Context, val applicationId: String) {
   fun logAuthorizationMethodStart(
       authId: String?,
       method: String?,
-      eventName: String? = EVENT_NAME_LOGIN_METHOD_START
+      eventName: String? = EVENT_NAME_LOGIN_METHOD_START,
+      loggingExtras: Map<String?, String?>? = null
   ) {
     val bundle = newAuthorizationLoggingBundle(authId)
     bundle.putString(EVENT_PARAM_METHOD, method)
+    if (loggingExtras != null && loggingExtras.isNotEmpty()) {
+      bundle.putString(
+          EVENT_PARAM_EXTRAS, JSONObject(loggingExtras.filterKeys { it != null }).toString())
+    }
     logAndEmit(eventName, bundle)
   }
 

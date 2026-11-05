@@ -9,12 +9,14 @@
 package com.facebook.login
 
 import android.app.Activity
+import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.pm.ResolveInfo
 import android.content.pm.ServiceInfo
 import android.os.Bundle
 import androidx.fragment.app.Fragment
+import androidx.test.core.app.ApplicationProvider
 import com.facebook.AccessToken
 import com.facebook.AccessTokenSource
 import com.facebook.AuthenticationToken
@@ -23,10 +25,12 @@ import com.facebook.FacebookActivity
 import com.facebook.FacebookException
 import com.facebook.FacebookOperationCanceledException
 import com.facebook.FacebookSdk
+import com.facebook.internal.AndroidLvaGate
 import com.facebook.internal.Validate
 import com.facebook.internal.security.OidcSecurityUtil
 import com.facebook.login.AuthenticationTokenTestUtil.getEncodedAuthTokenStringForTest
 import org.assertj.core.api.Assertions.assertThat
+import org.json.JSONObject
 import org.junit.Before
 import org.junit.Test
 import org.mockito.kotlin.any
@@ -189,6 +193,72 @@ class CustomTabLoginMethodHandlerTest : LoginHandlerTestCase() {
         mockChromeCustomTabsSupported(true, DEV_PACKAGE)
         val handler = CustomTabLoginMethodHandler(mockLoginClient)
         assertThat(handler.tryAuthorize(request)).isEqualTo(1)
+    }
+
+    /**
+     * mockChromeCustomTabsSupported re-mocks FacebookSdk with a mock activity as the context, so
+     * this restores the app ID and gives the activity real SharedPreferences, then records [gate].
+     */
+    private fun setUpAndroidLvaGate(gateKeepers: String) {
+        mockCustomTabRedirectActivity(true)
+        mockChromeCustomTabsSupported(true, CHROME_PACKAGE)
+        whenever(FacebookSdk.getApplicationId()).thenReturn(request.applicationId)
+        val context: Context = ApplicationProvider.getApplicationContext()
+        whenever(activity.getSharedPreferences(any(), any())).thenAnswer {
+            context.getSharedPreferences(it.getArgument(0), it.getArgument(1))
+        }
+        AndroidLvaGate.clearInMemoryForTesting()
+        AndroidLvaGate.onGateKeepersFetched(
+            request.applicationId,
+            JSONObject("{\"data\":[{\"gatekeepers\":[$gateKeepers]}]}"),
+            false)
+    }
+
+    private val gateOnFullTreatment =
+        "{\"key\":\"${AndroidLvaGate.GATE_KEY}\",\"value\":true}," +
+            "{\"key\":\"${AndroidLvaGate.FULL_TREATMENT_KEY}\",\"value\":true}"
+
+    @Test
+    fun testTryAuthorizeWithGateOffAssignsNoArm() {
+        setUpAndroidLvaGate("")
+        val handler = CustomTabLoginMethodHandler(mockLoginClient)
+        assertThat(handler.tryAuthorize(request)).isEqualTo(1)
+        assertThat(request.androidLvaClientArm).isNull()
+        assertThat(handler.methodStartLoggingExtras).isNull()
+        assertThat(handler.methodLoggingExtras?.get(AndroidLvaClientArm.LOGGING_EXTRA)).isNull()
+    }
+
+    @Test
+    fun testTryAuthorizeWithGateOnAssignsAndLogsTheArm() {
+        setUpAndroidLvaGate(gateOnFullTreatment)
+        val handler = CustomTabLoginMethodHandler(mockLoginClient)
+        assertThat(handler.tryAuthorize(request)).isEqualTo(1)
+        assertThat(request.androidLvaClientArm).isEqualTo(AndroidLvaClientArm.TREATMENT)
+        assertThat(handler.methodStartLoggingExtras)
+            .isEqualTo(mapOf(AndroidLvaClientArm.LOGGING_EXTRA to AndroidLvaClientArm.TREATMENT))
+        assertThat(handler.methodLoggingExtras?.get(AndroidLvaClientArm.LOGGING_EXTRA))
+            .isEqualTo(AndroidLvaClientArm.TREATMENT)
+    }
+
+    @Test
+    fun testTryAuthorizeDropsAStaleArmWhenTheGateIsOff() {
+        setUpAndroidLvaGate("")
+        val handler = CustomTabLoginMethodHandler(mockLoginClient)
+        handler.methodLoggingExtras =
+            mutableMapOf(AndroidLvaClientArm.LOGGING_EXTRA to AndroidLvaClientArm.TREATMENT)
+        request.androidLvaClientArm = AndroidLvaClientArm.TREATMENT
+        handler.tryAuthorize(request)
+        assertThat(request.androidLvaClientArm).isNull()
+        assertThat(handler.methodLoggingExtras?.get(AndroidLvaClientArm.LOGGING_EXTRA)).isNull()
+    }
+
+    @Test
+    fun testTryAuthorizeForAnotherAppAssignsNoArm() {
+        setUpAndroidLvaGate(gateOnFullTreatment)
+        whenever(FacebookSdk.getApplicationId()).thenReturn("another_app")
+        val handler = CustomTabLoginMethodHandler(mockLoginClient)
+        handler.tryAuthorize(request)
+        assertThat(request.androidLvaClientArm).isNull()
     }
 
     private fun mockChromeCustomTabsSupported(supported: Boolean, packageName: String) {

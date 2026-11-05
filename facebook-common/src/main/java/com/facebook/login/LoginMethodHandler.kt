@@ -42,6 +42,10 @@ import org.json.JSONObject
 @VisibleForTesting(otherwise = VisibleForTesting.PACKAGE_PRIVATE)
 abstract class LoginMethodHandler : Parcelable {
   var methodLoggingExtras: MutableMap<String?, String?>? = null
+
+  /** Extras logged with this method's start event. Most handlers have none. */
+  open val methodStartLoggingExtras: Map<String?, String?>?
+    get() = null
   lateinit var loginClient: LoginClient
   abstract val nameForLogging: String
 

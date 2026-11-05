@@ -22,6 +22,7 @@ import com.facebook.FacebookRequestError
 import com.facebook.FacebookSdk
 import com.facebook.FacebookSdk.getExecutor
 import com.facebook.FacebookServiceException
+import com.facebook.internal.AndroidLvaGate
 import com.facebook.internal.CustomTab.Companion.getURIForAction
 import com.facebook.internal.CustomTabUtils.getChromePackage
 import com.facebook.internal.CustomTabUtils.getValidRedirectURI
@@ -56,8 +57,15 @@ class CustomTabLoginMethodHandler : WebLoginMethodHandler {
 
   override fun getSSODevice(): String? = "chrome_custom_tab"
 
+  override val methodStartLoggingExtras: Map<String?, String?>?
+    get() =
+        methodLoggingExtras?.get(AndroidLvaClientArm.LOGGING_EXTRA)?.let {
+          mapOf(AndroidLvaClientArm.LOGGING_EXTRA to it)
+        }
+
   override fun tryAuthorize(request: Request): Int {
     val loginClient = loginClient
+    assignAndroidLvaClientArm(request)
     if (getRedirectUrl().isEmpty()) {
       return 0
     }
@@ -83,6 +91,26 @@ class CustomTabLoginMethodHandler : WebLoginMethodHandler {
     @Suppress("DEPRECATION")
     loginClient.fragment?.startActivityForResult(intent, CUSTOM_TAB_REQUEST_CODE)
     return 1
+  }
+
+  /**
+   * Reads the Android SDK LVA gate once for this attempt and assigns its client arm, stored in the
+   * request and logged with the method events. The gate belongs to the SDK's app, so a request for
+   * another app gets no arm.
+   */
+  private fun assignAndroidLvaClientArm(request: Request) {
+    val arm =
+        if (request.applicationId == FacebookSdk.getApplicationId()) {
+          AndroidLvaClientArm.assign(AndroidLvaGate.getSnapshot())
+        } else {
+          null
+        }
+    request.androidLvaClientArm = arm
+    if (arm != null) {
+      addLoggingExtra(AndroidLvaClientArm.LOGGING_EXTRA, arm)
+    } else {
+      methodLoggingExtras?.remove(AndroidLvaClientArm.LOGGING_EXTRA)
+    }
   }
 
   private val chromePackage: String?

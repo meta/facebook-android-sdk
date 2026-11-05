@@ -206,6 +206,33 @@ class LoginLoggerTest : FacebookPowerMockTestCase() {
   }
 
   @Test
+  fun `test logAuthorizationMethodStart logging extras`() {
+    val bundleCaptor = argumentCaptor<Bundle>()
+
+    loginLogger.logAuthorizationMethodStart(
+        testLoginRequest.authId,
+        "test_method",
+        LoginLogger.EVENT_NAME_LOGIN_METHOD_START,
+        mapOf("lva_client_arm" to "treatment"))
+
+    verify(mockInternalAppEventsLogger)
+        .logEventImplicitly(eq(LoginLogger.EVENT_NAME_LOGIN_METHOD_START), bundleCaptor.capture())
+    val extras = JSONObject(bundleCaptor.firstValue.getString(LoginLogger.EVENT_PARAM_EXTRAS) ?: "")
+    assertThat(extras.getString("lva_client_arm")).isEqualTo("treatment")
+  }
+
+  @Test
+  fun `test logAuthorizationMethodStart without extras logs none`() {
+    val bundleCaptor = argumentCaptor<Bundle>()
+
+    loginLogger.logAuthorizationMethodStart(testLoginRequest.authId, "test_method")
+
+    verify(mockInternalAppEventsLogger)
+        .logEventImplicitly(eq(LoginLogger.EVENT_NAME_LOGIN_METHOD_START), bundleCaptor.capture())
+    assertThat(bundleCaptor.firstValue.getString(LoginLogger.EVENT_PARAM_EXTRAS)).isEmpty()
+  }
+
+  @Test
   fun `test logAuthorizationMethodComplete logging the result, error message and error code `() {
     val result = "error"
     val errorMessage = "errorMessage"

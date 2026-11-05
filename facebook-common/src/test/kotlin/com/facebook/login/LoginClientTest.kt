@@ -94,6 +94,16 @@ class LoginClientTest : FacebookPowerMockTestCase() {
   }
 
   @Test
+  fun testRequestParcelingWithAndroidLvaClientArm() {
+    val request = createRequest()
+    request.androidLvaClientArm = "treatment"
+    val unparceledRequest = checkNotNull(TestUtils.parcelAndUnparcel(request))
+    assertThat(unparceledRequest.androidLvaClientArm).isEqualTo("treatment")
+    assertThat(checkNotNull(TestUtils.parcelAndUnparcel(createRequest())).androidLvaClientArm)
+        .isNull()
+  }
+
+  @Test
   fun testResultParceling() {
     val request =
         LoginClient.Request(

@@ -245,7 +245,8 @@ open class LoginClient : Parcelable {
           pendingRequest.authId,
           handler.nameForLogging,
           if (pendingRequest.isFamilyLogin) LoginLogger.EVENT_NAME_FOA_LOGIN_METHOD_START
-          else LoginLogger.EVENT_NAME_LOGIN_METHOD_START)
+          else LoginLogger.EVENT_NAME_LOGIN_METHOD_START,
+          handler.methodStartLoggingExtras)
       numTotalIntentsFired = numTried
     } else {
       // We didn't try it, so we don't get any other completion
@@ -402,6 +403,8 @@ open class LoginClient : Parcelable {
     private var shouldSkipAccountDeduplication = false
     var forceConfirmation = false
     var androidSsoContext: String? = null
+    // The Android SDK LVA client arm, assigned once when the Custom Tab attempt starts.
+    var androidLvaClientArm: String? = null
     val nonce: String
     val codeVerifier: String?
     val codeChallenge: String?
@@ -493,6 +496,7 @@ open class LoginClient : Parcelable {
       codeChallenge = parcel.readString()
       val codeChallengeMethodEnumVal = parcel.readString()
       codeChallengeMethod = codeChallengeMethodEnumVal?.let { CodeChallengeMethod.valueOf(it) }
+      androidLvaClientArm = parcel.readString()
     }
 
     override fun describeContents(): Int = 0
@@ -520,6 +524,7 @@ open class LoginClient : Parcelable {
       dest.writeString(codeVerifier)
       dest.writeString(codeChallenge)
       dest.writeString(codeChallengeMethod?.name)
+      dest.writeString(androidLvaClientArm)
     }
 
     companion object {
