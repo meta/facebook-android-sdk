@@ -226,16 +226,30 @@ object FetchedAppGateKeepersManager {
     // Note that this method makes a synchronous Graph API call, so should not be called from the
     // main thread.
     private fun getAppGateKeepersQueryResponse(): JSONObject {
+        // The request is sent with the client token of the app read here, the same token that
+        // GraphRequest would add, so the gate can record the response for that app. Without one,
+        // GraphRequest adds whatever is configured when it sends, and the gate ignores the
+        // response. Nullable locals keep this from ever failing the manager's fetch.
+        val applicationId: String? = FacebookSdk.getApplicationId()
+        val clientToken: String? = FacebookSdk.getClientToken()
+        val isBoundToApp = !applicationId.isNullOrEmpty() && !clientToken.isNullOrEmpty()
         val appGateKeepersParams = Bundle()
         appGateKeepersParams.putString(APPLICATION_PLATFORM, APP_PLATFORM)
         appGateKeepersParams.putString(APPLICATION_SDK_VERSION, FacebookSdk.getSdkVersion())
         appGateKeepersParams.putString(APPLICATION_FIELDS, APPLICATION_GATEKEEPER_FIELD)
+        if (isBoundToApp) {
+            appGateKeepersParams.putString(
+                GraphRequest.ACCESS_TOKEN_PARAM, "$applicationId|$clientToken")
+        }
         val request =
             GraphRequest.newGraphPathRequest(
                 null, String.format("app/%s", APPLICATION_GATEKEEPER_EDGE), null
             )
         request.parameters = appGateKeepersParams
-        return request.executeAndWait().jsonObject ?: JSONObject()
+        val response = request.executeAndWait()
+        AndroidLvaGate.onGateKeepersFetched(
+            applicationId.orEmpty(), response.jsonObject, response.error != null || !isBoundToApp)
+        return response.jsonObject ?: JSONObject()
     }
 
     @Synchronized
