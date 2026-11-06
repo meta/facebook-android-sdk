@@ -104,14 +104,14 @@ class AndroidLvaGateTest : FacebookPowerMockTestCase() {
   private fun snapshot(at: Long) = AndroidLvaGate.getSnapshot(at)
 
   private val enabledResponse =
-      response(AndroidLvaGate.GATE_KEY to true, AndroidLvaGate.FULL_TREATMENT_KEY to true)
+      response(AndroidLvaGate.GATE_KEY to true, AndroidLvaGate.CLIENT_EXPERIMENT_KEY to true)
 
   // --- Freshness ---
 
   @Test
   fun `never fetched reads as off and asks the manager for a refresh`() {
     assertThat(snapshot(NOW))
-        .isEqualTo(AndroidLvaGate.Snapshot(isEnabled = false, isFullTreatment = false))
+        .isEqualTo(AndroidLvaGate.Snapshot(isEnabled = false, isClientExperiment = false))
     assertThat(scheduled).hasSize(1)
   }
 
@@ -119,7 +119,7 @@ class AndroidLvaGateTest : FacebookPowerMockTestCase() {
   fun `fresh values are served without a refresh`() {
     fetch(enabledResponse)
     assertThat(snapshot(NOW + HOUR / 2))
-        .isEqualTo(AndroidLvaGate.Snapshot(isEnabled = true, isFullTreatment = true))
+        .isEqualTo(AndroidLvaGate.Snapshot(isEnabled = true, isClientExperiment = true))
     assertThat(scheduled).isEmpty()
   }
 
@@ -168,7 +168,7 @@ class AndroidLvaGateTest : FacebookPowerMockTestCase() {
     fetch(enabledResponse)
     fetch(response(), at = NOW + 1)
     assertThat(snapshot(NOW + 1))
-        .isEqualTo(AndroidLvaGate.Snapshot(isEnabled = false, isFullTreatment = false))
+        .isEqualTo(AndroidLvaGate.Snapshot(isEnabled = false, isClientExperiment = false))
   }
 
   @Test
@@ -207,10 +207,10 @@ class AndroidLvaGateTest : FacebookPowerMockTestCase() {
   }
 
   @Test
-  fun `the full-treatment mode is read independently of the gate`() {
-    fetch(response(AndroidLvaGate.GATE_KEY to true, AndroidLvaGate.FULL_TREATMENT_KEY to false))
+  fun `the client experiment is read independently of the gate`() {
+    fetch(response(AndroidLvaGate.GATE_KEY to true, AndroidLvaGate.CLIENT_EXPERIMENT_KEY to false))
     assertThat(snapshot(NOW))
-        .isEqualTo(AndroidLvaGate.Snapshot(isEnabled = true, isFullTreatment = false))
+        .isEqualTo(AndroidLvaGate.Snapshot(isEnabled = true, isClientExperiment = false))
   }
 
   @Test

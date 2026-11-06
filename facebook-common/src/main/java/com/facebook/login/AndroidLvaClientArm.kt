@@ -14,10 +14,11 @@ import com.facebook.internal.AndroidLvaGate
 import kotlin.random.Random
 
 /**
- * The client arm of the Android SDK Login Via App (LVA) Stage A experiment. It is assigned for every
- * Custom Tab login attempt of an app whose gate is on, before any eligibility check, so it says
- * nothing about the device. It comes from a random per-install value that is stored locally and
- * never sent anywhere. Control attempts behave exactly as today.
+ * The client arm of an Android SDK Login Via App (LVA) attempt. It is assigned for every Custom Tab
+ * login attempt of an app whose gate is on, before any eligibility check, so it says nothing about
+ * the device. Every install is in treatment unless the client experiment is on, which splits
+ * installs 50/50 by a random per-install value that is stored locally and never sent anywhere.
+ * Control attempts behave exactly as today.
  */
 internal object AndroidLvaClientArm {
   const val LOGGING_EXTRA = "lva_client_arm"
@@ -27,7 +28,7 @@ internal object AndroidLvaClientArm {
   private const val PREFS_STORE = "com.facebook.login.AndroidLvaClientArm"
   private const val INSTALL_BUCKET = "install_bucket"
   private const val BUCKETS = 100
-  private const val STAGE_A_TREATMENT_BUCKETS = 50
+  private const val EXPERIMENT_TREATMENT_BUCKETS = 50
 
   /**
    * The arm of an attempt that read [gate] at its start, or null when the gate is off (or, before
@@ -38,7 +39,8 @@ internal object AndroidLvaClientArm {
       return null
     }
     val bucket = getInstallBucket() ?: return null
-    return if (gate.isFullTreatment || bucket < STAGE_A_TREATMENT_BUCKETS) TREATMENT else CONTROL
+    return if (!gate.isClientExperiment || bucket < EXPERIMENT_TREATMENT_BUCKETS) TREATMENT
+    else CONTROL
   }
 
   private fun getInstallBucket(): Int? {

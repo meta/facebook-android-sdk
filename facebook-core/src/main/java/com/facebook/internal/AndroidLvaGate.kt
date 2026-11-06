@@ -21,10 +21,11 @@ import org.json.JSONException
 import org.json.JSONObject
 
 /**
- * The Android SDK Login Via App (LVA) gate and its full-treatment mode for the SDK's app, with
- * their own freshness rules. With full treatment on, every install gets the new client behavior;
- * off or absent, installs are split 50/50 with today's behavior (the first client-only experiment,
- * Stage A in the design doc).
+ * The Android SDK Login Via App (LVA) gate and its client experiment for the SDK's app, with their
+ * own freshness rules. While the gate is on, every install gets the new client behavior unless the
+ * client experiment is on, which splits installs 50/50 with today's behavior (the first
+ * client-only experiment, Stage A in the design doc). With the gate off, the client experiment has
+ * no effect.
  *
  * Unlike [FetchedAppGateKeepersManager], which keeps serving stale or merged values, a value here
  * comes only from an error-free, well-formed gatekeeper list, a key that list omits means false,
@@ -39,11 +40,11 @@ import org.json.JSONObject
 @RestrictTo(RestrictTo.Scope.LIBRARY_GROUP)
 object AndroidLvaGate {
     const val GATE_KEY = "FBSDKFeatureAndroidLva"
-    const val FULL_TREATMENT_KEY = "FBSDKFeatureAndroidLvaFullTreatment"
+    const val CLIENT_EXPERIMENT_KEY = "FBSDKFeatureAndroidLvaClientExperiment"
 
     private const val PREFS_STORE = "com.facebook.internal.preferences.ANDROID_LVA_GATE"
     private const val ENABLED = "enabled"
-    private const val FULL_TREATMENT = "full_treatment"
+    private const val CLIENT_EXPERIMENT = "client_experiment"
     private const val FETCHED_AT = "fetched_at"
     private val REFRESH_AFTER_MS = TimeUnit.HOURS.toMillis(1)
     private val EXPIRE_AFTER_MS = TimeUnit.HOURS.toMillis(24)
@@ -54,13 +55,13 @@ object AndroidLvaGate {
     @Volatile private var lastRefreshAttempt: Long? = null
 
     /** The gate values an attempt reads once at its start and uses throughout. */
-    data class Snapshot(val isEnabled: Boolean, val isFullTreatment: Boolean)
+    data class Snapshot(val isEnabled: Boolean, val isClientExperiment: Boolean)
 
-    private val OFF = Snapshot(isEnabled = false, isFullTreatment = false)
+    private val OFF = Snapshot(isEnabled = false, isClientExperiment = false)
 
     private data class Record(
         val isEnabled: Boolean,
-        val isFullTreatment: Boolean,
+        val isClientExperiment: Boolean,
         val fetchedAt: Long
     )
 
@@ -105,7 +106,7 @@ object AndroidLvaGate {
             if (record == null || age == null || age < 0 || age > EXPIRE_AFTER_MS) {
                 OFF
             } else {
-                Snapshot(record.isEnabled, record.isFullTreatment)
+                Snapshot(record.isEnabled, record.isClientExperiment)
             }
         } catch (e: Exception) {
             Utility.logd(Utility.LOG_TAG, e)
@@ -126,17 +127,17 @@ object AndroidLvaGate {
      */
     private fun parse(gateKeepers: JSONArray, now: Long): Record? {
         var isEnabled = false
-        var isFullTreatment = false
+        var isClientExperiment = false
         for (i in 0 until gateKeepers.length()) {
             val gateKeeper = gateKeepers.opt(i) as? JSONObject ?: return null
             val key = gateKeeper.opt("key") as? String ?: return null
             val value = parseBoolean(gateKeeper.opt("value")) ?: return null
             when (key) {
                 GATE_KEY -> isEnabled = value
-                FULL_TREATMENT_KEY -> isFullTreatment = value
+                CLIENT_EXPERIMENT_KEY -> isClientExperiment = value
             }
         }
-        return Record(isEnabled, isFullTreatment, now)
+        return Record(isEnabled, isClientExperiment, now)
     }
 
     // The manager accepts the same representations (JSONObject.getBoolean).
@@ -197,7 +198,7 @@ object AndroidLvaGate {
         val json =
             JSONObject()
                 .put(ENABLED, record.isEnabled)
-                .put(FULL_TREATMENT, record.isFullTreatment)
+                .put(CLIENT_EXPERIMENT, record.isClientExperiment)
                 .put(FETCHED_AT, record.fetchedAt)
         getPreferences()?.edit()?.putString(applicationId, json.toString())?.apply()
     }
@@ -212,7 +213,7 @@ object AndroidLvaGate {
             val parsed = JSONObject(json)
             Record(
                 parsed.getBoolean(ENABLED),
-                parsed.getBoolean(FULL_TREATMENT),
+                parsed.getBoolean(CLIENT_EXPERIMENT),
                 parsed.getLong(FETCHED_AT))
                 .also { records[applicationId] = it }
         } catch (e: JSONException) {

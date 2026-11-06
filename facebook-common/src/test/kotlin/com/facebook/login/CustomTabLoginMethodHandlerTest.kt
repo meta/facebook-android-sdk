@@ -214,9 +214,7 @@ class CustomTabLoginMethodHandlerTest : LoginHandlerTestCase() {
             false)
     }
 
-    private val gateOnFullTreatment =
-        "{\"key\":\"${AndroidLvaGate.GATE_KEY}\",\"value\":true}," +
-            "{\"key\":\"${AndroidLvaGate.FULL_TREATMENT_KEY}\",\"value\":true}"
+    private val gateOn = "{\"key\":\"${AndroidLvaGate.GATE_KEY}\",\"value\":true}"
 
     @Test
     fun testTryAuthorizeWithGateOffAssignsNoArm() {
@@ -230,7 +228,7 @@ class CustomTabLoginMethodHandlerTest : LoginHandlerTestCase() {
 
     @Test
     fun testTryAuthorizeWithGateOnAssignsAndLogsTheArm() {
-        setUpAndroidLvaGate(gateOnFullTreatment)
+        setUpAndroidLvaGate(gateOn)
         val handler = CustomTabLoginMethodHandler(mockLoginClient)
         assertThat(handler.tryAuthorize(request)).isEqualTo(1)
         assertThat(request.androidLvaClientArm).isEqualTo(AndroidLvaClientArm.TREATMENT)
@@ -254,7 +252,7 @@ class CustomTabLoginMethodHandlerTest : LoginHandlerTestCase() {
 
     @Test
     fun testTryAuthorizeForAnotherAppAssignsNoArm() {
-        setUpAndroidLvaGate(gateOnFullTreatment)
+        setUpAndroidLvaGate(gateOn)
         whenever(FacebookSdk.getApplicationId()).thenReturn("another_app")
         val handler = CustomTabLoginMethodHandler(mockLoginClient)
         handler.tryAuthorize(request)

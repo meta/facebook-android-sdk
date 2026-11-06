@@ -37,8 +37,8 @@ class AndroidLvaClientArmTest : FacebookPowerMockTestCase() {
     prefs.edit().clear().commit()
   }
 
-  private fun gate(isEnabled: Boolean, isFullTreatment: Boolean = false) =
-      AndroidLvaGate.Snapshot(isEnabled, isFullTreatment)
+  private fun gate(isEnabled: Boolean, isClientExperiment: Boolean = true) =
+      AndroidLvaGate.Snapshot(isEnabled, isClientExperiment)
 
   private fun storeBucket(bucket: Int) {
     prefs.edit().putInt("install_bucket", bucket).commit()
@@ -51,7 +51,7 @@ class AndroidLvaClientArmTest : FacebookPowerMockTestCase() {
   }
 
   @Test
-  fun `stage A splits installs by their stored bucket`() {
+  fun `the client experiment splits installs by their stored bucket`() {
     storeBucket(10)
     assertThat(AndroidLvaClientArm.assign(gate(isEnabled = true)))
         .isEqualTo(AndroidLvaClientArm.TREATMENT)
@@ -61,9 +61,9 @@ class AndroidLvaClientArmTest : FacebookPowerMockTestCase() {
   }
 
   @Test
-  fun `full treatment puts every install in treatment`() {
+  fun `without the client experiment every install is in treatment`() {
     storeBucket(99)
-    assertThat(AndroidLvaClientArm.assign(gate(isEnabled = true, isFullTreatment = true)))
+    assertThat(AndroidLvaClientArm.assign(gate(isEnabled = true, isClientExperiment = false)))
         .isEqualTo(AndroidLvaClientArm.TREATMENT)
   }
 
