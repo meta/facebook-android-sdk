@@ -1,0 +1,95 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Copyright (c) Meta Platforms, Inc. and affiliates.
+    All rights reserved.
+
+    This source code is licensed under the license found in the
+    LICENSE file in the root directory of this source tree.
+-->
+
+<!-- Android SDK Login Via App: shown while the login may still be finishing in another app.
+     It starts as a waiting state (title and progress); the body and both actions appear only
+     when AndroidLvaPendingScreen.showActions runs. It scrolls when the content is taller than
+     the screen (landscape, multi-window, large text), so both actions stay reachable, and stays
+     centered when it fits. -->
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="#FFFFFF"
+    android:fillViewport="true">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:gravity="center"
+        android:orientation="vertical"
+        android:padding="24dp">
+
+        <TextView
+            android:id="@+id/com_facebook_android_lva_pending_title"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:fontFamily="@font/optimistic_vf"
+            android:gravity="center"
+            android:text="@string/com_facebook_android_lva_pending_title"
+            android:textColor="#0A1317"
+            android:textFontWeight="600"
+            android:textSize="17sp"
+            android:textStyle="bold" />
+
+        <ProgressBar
+            android:id="@+id/com_facebook_android_lva_pending_progress"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="24dp"
+            android:indeterminate="true"
+            android:indeterminateTint="#0064E0" />
+
+        <LinearLayout
+            android:id="@+id/com_facebook_android_lva_pending_actions"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:visibility="gone">
+
+            <TextView
+                android:id="@+id/com_facebook_android_lva_pending_body"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:fontFamily="@font/optimistic_vf"
+                android:gravity="center"
+                android:text="@string/com_facebook_android_lva_pending_body"
+                android:textColor="#0A1317"
+                android:textSize="15sp" />
+
+            <Button
+                android:id="@+id/com_facebook_android_lva_pending_continue"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="24dp"
+                android:background="@drawable/com_facebook_sso_noapp_continue_button_bg"
+                android:fontFamily="@font/optimistic_vf"
+                android:minHeight="48dp"
+                android:stateListAnimator="@null"
+                android:text="@string/com_facebook_android_lva_pending_continue"
+                android:textAllCaps="false"
+                android:textColor="#F1F4F7"
+                android:textSize="15sp" />
+
+            <Button
+                android:id="@+id/com_facebook_android_lva_pending_cancel"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="12dp"
+                android:background="@drawable/com_facebook_sso_noapp_not_now_button_bg"
+                android:fontFamily="@font/optimistic_vf"
+                android:minHeight="48dp"
+                android:stateListAnimator="@null"
+                android:text="@string/com_facebook_loginview_cancel_action"
+                android:textAllCaps="false"
+                android:textColor="#0A1317"
+                android:textSize="15sp" />
+        </LinearLayout>
+    </LinearLayout>
+</ScrollView>

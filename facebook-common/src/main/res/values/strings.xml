@@ -34,6 +34,9 @@
     <string name="com_facebook_smart_login_confirmation_title">Confirm Login</string>
     <string name="com_facebook_smart_login_confirmation_continue_as">Continue as <xliff:g id="user name">%1$s</xliff:g></string>
     <string name="com_facebook_smart_login_confirmation_cancel">Not you?</string>
+    <string name="com_facebook_android_lva_pending_title" description="Title of the screen shown while the login finishes in another app (Instagram or the browser); first shown alone with a progress indicator, then with Continue and Cancel">Logging you in…</string>
+    <string name="com_facebook_android_lva_pending_body" description="Body of the same screen, shown with Continue and Cancel only when the login hasn't finished after a short wait or the user returns to the app. It must not imply that Cancel undoes a login already done in the browser">This may take a moment. If nothing happens, tap Continue.</string>
+    <string name="com_facebook_android_lva_pending_continue" description="Primary button on the same screen; reopens the login">Continue</string>
     <string name="com_facebook_sso_noapp_title" description="Title for the SSO dialog shown when the Facebook app is not installed on the device">Sign up faster with Facebook</string>
     <string name="com_facebook_sso_noapp_body" description="Body text for the SSO dialog shown when the Facebook app is not installed">Create your account in seconds with Facebook.</string>
     <string name="com_facebook_sso_noapp_not_now" description="Dismiss button text for the SSO dialog">Not now</string>
