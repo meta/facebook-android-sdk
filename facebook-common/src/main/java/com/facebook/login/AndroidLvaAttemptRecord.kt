@@ -10,6 +10,7 @@ package com.facebook.login
 
 import android.content.Context
 import android.content.SharedPreferences
+import androidx.annotation.VisibleForTesting
 import com.facebook.FacebookSdk
 import java.util.UUID
 import java.util.concurrent.TimeUnit
@@ -30,8 +31,10 @@ internal object AndroidLvaAttemptRecord {
   const val RESULT_EXTRA_STATE = "com.facebook.login.AndroidLvaAttemptRecord.state"
   const val RESULT_EXTRA_LAUNCH_NONCE = "com.facebook.login.AndroidLvaAttemptRecord.launch_nonce"
 
-  private const val PREFS_STORE = "com.facebook.login.AndroidLvaAttemptRecord"
-  private const val ACTIVE_ATTEMPT = "active_attempt"
+  @VisibleForTesting(otherwise = VisibleForTesting.PRIVATE)
+  internal const val PREFS_STORE = "com.facebook.login.AndroidLvaAttemptRecord"
+  @VisibleForTesting(otherwise = VisibleForTesting.PRIVATE)
+  internal const val ACTIVE_ATTEMPT = "active_attempt"
   private val LAUNCH_WINDOW_MS = TimeUnit.MINUTES.toMillis(30)
   private val PENDING_WINDOW_MS = TimeUnit.MINUTES.toMillis(10)
 
