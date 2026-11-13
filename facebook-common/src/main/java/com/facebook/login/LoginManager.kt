@@ -233,6 +233,7 @@ open class LoginManager() {
     var loggingExtras: Map<String, String>? = null
     var originalRequest: LoginClient.Request? = null
     var isCanceled = false
+    var androidLvaAuthId: String? = null
     if (data != null) {
       data.setExtrasClassLoader(LoginClient.Result::class.java.classLoader)
       @Suppress("DEPRECATION")
@@ -251,6 +252,18 @@ open class LoginManager() {
           isCanceled = true
         }
         loggingExtras = result.loggingExtras
+      } else if (resultCode == Activity.RESULT_CANCELED) {
+        // Android SDK LVA: a cancellation without a result (for example, the host app's task was
+        // cleared while the login ran in Instagram or the browser) is a cancel only when it
+        // identifies its own enhanced launch. Anything else keeps today's mapping.
+        val launch = getAndroidLvaLaunch(data)
+        if (launch != null) {
+          isCanceled = true
+          code = LoginClient.Result.Code.CANCEL
+          loggingExtras = mapOf(AndroidLvaClientArm.LOGGING_EXTRA to launch.arm)
+          androidLvaAuthId = launch.authLoggerId
+          AndroidLvaAttemptRecord.clearIf(launch.state, launch.version)
+        }
       }
     } else if (resultCode == Activity.RESULT_CANCELED) {
       isCanceled = true
@@ -262,9 +275,28 @@ open class LoginManager() {
     val wasLoginActivityTried = true
     val context: Context? = null // Sadly, there is no way to get activity context at this point.
     logCompleteLogin(
-        context, code, loggingExtras, exception, wasLoginActivityTried, originalRequest)
+        context,
+        code,
+        loggingExtras,
+        exception,
+        wasLoginActivityTried,
+        originalRequest,
+        androidLvaAuthId)
     finishLogin(accessToken, authenticationToken, originalRequest, exception, isCanceled, callback)
     return true
+  }
+
+  /**
+   * The active Android SDK LVA attempt that [data] identifies by both its state and its launch
+   * nonce, or null. Identity comes only from the result itself, never from the caller.
+   */
+  private fun getAndroidLvaLaunch(data: Intent): AndroidLvaAttemptRecord.Record? {
+    val state = data.getStringExtra(AndroidLvaAttemptRecord.RESULT_EXTRA_STATE) ?: return null
+    val launchNonce =
+        data.getStringExtra(AndroidLvaAttemptRecord.RESULT_EXTRA_LAUNCH_NONCE) ?: return null
+    return AndroidLvaAttemptRecord.read()?.takeIf {
+      it.state == state && it.launchNonce == launchNonce
+    }
   }
 
   /**
@@ -1075,10 +1107,23 @@ open class LoginManager() {
       resultExtras: Map<String, String>?,
       exception: Exception?,
       wasLoginActivityTried: Boolean,
-      request: LoginClient.Request?
+      request: LoginClient.Request?,
+      // The logger ID of an Android SDK LVA launch identified without a request.
+      androidLvaAuthId: String? = null
   ) {
     val loginLogger = LoginLoggerHolder.getLogger(context) ?: return
-    if (request == null) {
+    if (request == null && androidLvaAuthId != null) {
+      loginLogger.logCompleteLogin(
+          androidLvaAuthId,
+          hashMapOf(
+              LoginLogger.EVENT_EXTRAS_TRY_LOGIN_ACTIVITY to
+                  if (wasLoginActivityTried) AppEventsConstants.EVENT_PARAM_VALUE_YES
+                  else AppEventsConstants.EVENT_PARAM_VALUE_NO,
+              LoginLogger.EVENT_EXTRAS_FROM_SSO to "false"),
+          result,
+          resultExtras,
+          exception)
+    } else if (request == null) {
       // We don't expect this to happen, but if it does, log an event for diagnostic purposes.
       loginLogger.logUnexpectedError(
           LoginLogger.EVENT_NAME_LOGIN_COMPLETE,
