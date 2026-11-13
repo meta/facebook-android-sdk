@@ -124,6 +124,21 @@ class CustomTabMainActivityAndroidLvaTest : FacebookPowerMockTestCase() {
         .launchUrl(eq(activityController.get()), it.capture())
   }.allValues.size
 
+  /** Creates the activity and returns the redirect receiver it registered. */
+  private fun registeredReceiverAfterCreate(): BroadcastReceiver {
+    activityController = Robolectric.buildActivity(CustomTabMainActivity::class.java, launchIntent)
+    activityController.create(null)
+    val receivers = argumentCaptor<BroadcastReceiver>()
+    verify(mockLocalBroadcastManager).registerReceiver(receivers.capture(), any())
+    return receivers.firstValue
+  }
+
+  private fun markedCallback(state: String) =
+      Intent(CustomTabActivity.CUSTOM_TAB_REDIRECT_ACTION)
+          .putExtra(
+              CustomTabMainActivity.EXTRA_URL,
+              "fbconnect://cct.com.example.app#state=${Uri.encode(state)}")
+
   @Test
   fun `a return without a result shows the pending screen and enters PENDING`() {
     launchRecord()
@@ -394,6 +409,42 @@ class CustomTabMainActivityAndroidLvaTest : FacebookPowerMockTestCase() {
     assertThat(activity.isFinishing).isTrue
     assertThat(Shadows.shadowOf(activity).resultCode).isEqualTo(Activity.RESULT_CANCELED)
     assertThat(launches()).isEqualTo(1)
+  }
+
+  @Test
+  fun `the broadcast receiver ignores a marked callback without a live attempt`() {
+    launchRecord()
+    val receiver = registeredReceiverAfterCreate()
+    val activity = activityController.get()
+
+    receiver.onReceive(activity, markedCallback("{\"lva\":1,\"stale\":1}"))
+    assertThat(Shadows.shadowOf(activity).nextStartedActivity).isNull()
+    assertThat(activity.isFinishing).isFalse
+
+    receiver.onReceive(activity, markedCallback(STATE))
+    assertThat(Shadows.shadowOf(activity).nextStartedActivity.action)
+        .isEqualTo(CustomTabMainActivity.REFRESH_ACTION)
+  }
+
+  @Test
+  fun `a host for another attempt doesn't forward the live attempt's callback`() {
+    val liveState = "{\"lva\":1,\"attempt\":\"B\"}"
+    AndroidLvaAttemptRecord.launch(liveState, "logger2", "treatment")
+    val receiver = registeredReceiverAfterCreate() // this host's state is STATE (attempt A)
+
+    receiver.onReceive(activityController.get(), markedCallback(liveState))
+    assertThat(Shadows.shadowOf(activityController.get()).nextStartedActivity).isNull()
+    assertThat(activityController.get().isFinishing).isFalse
+  }
+
+  @Test
+  fun `an ordinary host doesn't forward a marked callback`() {
+    launchIntent.removeExtra(CustomTabMainActivity.EXTRA_ANDROID_LVA_STATE)
+    launchRecord()
+    val receiver = registeredReceiverAfterCreate()
+
+    receiver.onReceive(activityController.get(), markedCallback(STATE))
+    assertThat(Shadows.shadowOf(activityController.get()).nextStartedActivity).isNull()
   }
 
   @Test

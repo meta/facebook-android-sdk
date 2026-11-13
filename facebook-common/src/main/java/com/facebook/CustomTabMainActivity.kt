@@ -28,6 +28,7 @@ import com.facebook.internal.NativeProtocol.createProtocolResultIntent
 import com.facebook.internal.ServerProtocol
 import com.facebook.internal.Utility.parseUrlQueryString
 import com.facebook.login.AndroidLvaAttemptRecord
+import com.facebook.login.AndroidLvaCallbackCheck
 import com.facebook.login.AndroidLvaPendingScreen
 import com.facebook.login.LoginTargetApp
 import com.facebook.login.LoginTargetApp.Companion.fromString
@@ -87,6 +88,16 @@ class CustomTabMainActivity : Activity() {
       val redirectReceiver =
           object : BroadcastReceiver() {
             override fun onReceive(context: Context, intent: Intent) {
+              // A marked Android SDK LVA callback is forwarded only by the live host of its own
+              // attempt. Otherwise: no navigation, no result, no finish and no destroy broadcast.
+              when (val check = AndroidLvaCallbackCheck.check(intent.getStringExtra(EXTRA_URL))) {
+                is AndroidLvaCallbackCheck.Result.Rejected -> return
+                is AndroidLvaCallbackCheck.Result.Accepted ->
+                    if (check.record.state != androidLvaState || isFinishing) {
+                      return
+                    }
+                is AndroidLvaCallbackCheck.Result.Unmarked -> Unit
+              }
               // Remove the custom tab on top of this activity.
               val newIntent = Intent(this@CustomTabMainActivity, CustomTabMainActivity::class.java)
               newIntent.action = REFRESH_ACTION
