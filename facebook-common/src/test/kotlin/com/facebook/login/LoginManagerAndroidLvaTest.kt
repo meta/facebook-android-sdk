@@ -11,6 +11,7 @@ package com.facebook.login
 import android.app.Activity
 import android.content.Context
 import android.content.Intent
+import android.net.Uri
 import androidx.test.core.app.ApplicationProvider
 import com.facebook.FacebookCallback
 import com.facebook.FacebookPowerMockTestCase
@@ -95,6 +96,21 @@ class LoginManagerAndroidLvaTest : FacebookPowerMockTestCase() {
   }
 
   @Test
+  fun `an identified cancellation whose removal fails still rejects the launch's callback`() {
+    val record = launch()
+    val failingContext = failingAndroidLvaRecordWrites(context)
+    whenever(FacebookSdk.getApplicationContext()).thenReturn(failingContext)
+    LoginManager().onActivityResult(Activity.RESULT_CANCELED, resultFor(record), mockCallback)
+
+    verify(mockCallback).onCancel()
+    assertThat(AndroidLvaAttemptRecord.read()).isNull()
+    assertThat(
+            AndroidLvaCallbackCheck.check(
+                "fbconnect://cct.com.example.app#state=${Uri.encode(record.state)}"))
+        .isEqualTo(AndroidLvaCallbackCheck.Result.Rejected)
+  }
+
+  @Test
   fun `a cancellation without the launch extras keeps today's mapping and the record`() {
     launch()
     LoginManager().onActivityResult(Activity.RESULT_CANCELED, Intent(), mockCallback)
@@ -104,14 +120,25 @@ class LoginManagerAndroidLvaTest : FacebookPowerMockTestCase() {
     assertThat(AndroidLvaAttemptRecord.read()).isNotNull
   }
 
+  // A provisional result replaced a cancellation without data, so one whose launch is gone maps and
+  // logs as that did.
+  private fun verifyPlainCancel() {
+    verify(mockCallback).onCancel()
+    verify(mockCallback, never()).onError(any())
+    verify(mockLogger)
+        .logUnexpectedError(eq(LoginLogger.EVENT_NAME_LOGIN_COMPLETE), any(), anyOrNull())
+    verify(mockLogger, never())
+        .logCompleteLogin(anyOrNull(), any(), anyOrNull(), anyOrNull(), anyOrNull(), anyOrNull())
+  }
+
   @Test
-  fun `a cancellation with another launch nonce keeps today's mapping`() {
+  fun `a cancellation with another launch nonce is a plain cancel and keeps the record`() {
     val record = launch()
     val data =
         resultFor(record).putExtra(AndroidLvaAttemptRecord.RESULT_EXTRA_LAUNCH_NONCE, "other")
     LoginManager().onActivityResult(Activity.RESULT_CANCELED, data, mockCallback)
 
-    verify(mockCallback).onError(any())
+    verifyPlainCancel()
     assertThat(AndroidLvaAttemptRecord.read()).isEqualTo(record)
   }
 
@@ -121,8 +148,48 @@ class LoginManagerAndroidLvaTest : FacebookPowerMockTestCase() {
     val newer = launch(state = "{\"0_auth_logger_id\":\"logger1\",\"lva\":1,\"n\":2}")
     LoginManager().onActivityResult(Activity.RESULT_CANCELED, resultFor(older), mockCallback)
 
-    verify(mockCallback).onError(any())
+    verifyPlainCancel()
     assertThat(AndroidLvaAttemptRecord.read()).isEqualTo(newer)
+  }
+
+  @Test
+  fun `a provisional result whose record is gone is a plain cancel`() {
+    val record = launch()
+    AndroidLvaAttemptRecord.clearIf(record.state, record.version)
+    LoginManager().onActivityResult(Activity.RESULT_CANCELED, resultFor(record), mockCallback)
+
+    verifyPlainCancel()
+  }
+
+  @Test
+  fun `a cancellation after Continue identifies the same launch`() {
+    val record = launch()
+    AndroidLvaAttemptRecord.enterPending(record.state, record.version)
+    AndroidLvaAttemptRecord.continueLaunch(record.state, record.version)
+    LoginManager().onActivityResult(Activity.RESULT_CANCELED, resultFor(record), mockCallback)
+
+    verify(mockCallback).onCancel()
+    assertThat(AndroidLvaAttemptRecord.read()).isNull()
+  }
+
+  @Test
+  fun `an expired launch's cancellation still identifies it`() {
+    val record =
+        checkNotNull(
+            AndroidLvaAttemptRecord.launch(
+                STATE, "logger1", AndroidLvaClientArm.TREATMENT, now = 0L))
+    LoginManager().onActivityResult(Activity.RESULT_CANCELED, resultFor(record), mockCallback)
+
+    verify(mockCallback).onCancel()
+    verify(mockLogger)
+        .logCompleteLogin(
+            eq("logger1"),
+            any(),
+            eq(LoginClient.Result.Code.CANCEL),
+            eq(mapOf(AndroidLvaClientArm.LOGGING_EXTRA to AndroidLvaClientArm.TREATMENT)),
+            isNull(),
+            anyOrNull())
+    assertThat(AndroidLvaAttemptRecord.read()).isNull()
   }
 
   @Test

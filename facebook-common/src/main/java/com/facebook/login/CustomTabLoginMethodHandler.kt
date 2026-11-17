@@ -83,11 +83,20 @@ class CustomTabLoginMethodHandler : WebLoginMethodHandler {
       }
     }
     val activity: Activity = loginClient.activity ?: return 0
+    val androidLvaLaunch = launchAndroidLvaIfInScope(request, parameters, activity)
+    if (androidLvaLaunch == null) {
+      AndroidLvaAttemptRecord.clearActive()
+    }
     val intent = Intent(activity, CustomTabMainActivity::class.java)
     intent.putExtra(CustomTabMainActivity.EXTRA_ACTION, OAUTH_DIALOG)
     intent.putExtra(CustomTabMainActivity.EXTRA_PARAMS, parameters)
     intent.putExtra(CustomTabMainActivity.EXTRA_CHROME_PACKAGE, chromePackage)
     intent.putExtra(CustomTabMainActivity.EXTRA_TARGET_APP, request.loginTargetApp.toString())
+    if (androidLvaLaunch != null) {
+      intent.putExtra(CustomTabMainActivity.EXTRA_ANDROID_LVA_STATE, androidLvaLaunch.state)
+      intent.putExtra(
+          CustomTabMainActivity.EXTRA_ANDROID_LVA_LAUNCH_NONCE, androidLvaLaunch.launchNonce)
+    }
     @Suppress("DEPRECATION")
     loginClient.fragment?.startActivityForResult(intent, CUSTOM_TAB_REQUEST_CODE)
     return 1
@@ -111,6 +120,45 @@ class CustomTabLoginMethodHandler : WebLoginMethodHandler {
     } else {
       methodLoggingExtras?.remove(AndroidLvaClientArm.LOGGING_EXTRA)
     }
+  }
+
+  /**
+   * Android SDK LVA: for an attempt in scope, marks its state, starts its attempt record and asks
+   * for LVA's hand-off with sso `chrome_custom_tab_lva`. The host activity's provisional result
+   * identifies the launch until the attempt completes. If the record can't be stored, the attempt
+   * goes ahead unenhanced.
+   */
+  private fun launchAndroidLvaIfInScope(
+      request: Request,
+      parameters: Bundle,
+      activity: Activity
+  ): AndroidLvaAttemptRecord.Record? {
+    val arm = request.androidLvaClientArm ?: return null
+    if (!AndroidLvaEligibility.isInScope(
+        request,
+        parameters.getString(ServerProtocol.DIALOG_PARAM_REDIRECT_URI),
+        chromePackage,
+        activity.packageManager)) {
+      return null
+    }
+    val state =
+        try {
+          JSONObject(parameters.getString(ServerProtocol.DIALOG_PARAM_STATE) ?: return null)
+              .put(AndroidLvaCallbackCheck.STATE_DISCRIMINATOR, 1)
+              .toString()
+        } catch (e: JSONException) {
+          return null
+        }
+    val record = AndroidLvaAttemptRecord.launch(state, request.authId, arm) ?: return null
+    parameters.putString(ServerProtocol.DIALOG_PARAM_STATE, state)
+    parameters.putString(
+        ServerProtocol.DIALOG_PARAM_SSO_DEVICE, CustomTabMainActivity.ANDROID_LVA_SSO)
+    request.androidLvaLaunchState = record.state
+    request.androidLvaLaunchNonce = record.launchNonce
+    activity.setResult(
+        Activity.RESULT_CANCELED,
+        AndroidLvaAttemptRecord.putResultExtras(Intent(), record.state, record.launchNonce))
+    return record
   }
 
   private val chromePackage: String?

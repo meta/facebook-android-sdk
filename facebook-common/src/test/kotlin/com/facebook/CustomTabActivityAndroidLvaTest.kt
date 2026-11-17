@@ -16,6 +16,7 @@ import android.net.Uri
 import androidx.localbroadcastmanager.content.LocalBroadcastManager
 import androidx.test.core.app.ApplicationProvider
 import com.facebook.login.AndroidLvaAttemptRecord
+import com.facebook.login.failingAndroidLvaRecordWrites
 import java.util.concurrent.TimeUnit
 import org.assertj.core.api.Assertions.assertThat
 import org.junit.Test
@@ -154,5 +155,28 @@ class CustomTabActivityAndroidLvaTest : FacebookPowerMockTestCase() {
         CustomTabActivity.ANDROID_LVA_ORPHAN_TIMEOUT_MS, TimeUnit.MILLISECONDS)
     assertThat(activity.isFinishing).isTrue
     assertThat(AndroidLvaAttemptRecord.read()).isNotNull
+  }
+
+  @Test
+  fun `a cleared attempt whose removal failed doesn't receive its callback`() {
+    val record = checkNotNull(AndroidLvaAttemptRecord.launch(STATE, "logger1", "treatment"))
+    val failingContext = failingAndroidLvaRecordWrites(context)
+    whenever(FacebookSdk.getApplicationContext()).thenReturn(failingContext)
+    AndroidLvaAttemptRecord.clearIf(record.state, record.version)
+
+    val activity = receiveCallback(STATE)
+    assertThat(activity.isFinishing).isTrue
+    assertThat(Shadows.shadowOf(activity).nextStartedActivityForResult).isNull()
+  }
+
+  @Test
+  fun `an attempt superseded by a newer plain attempt doesn't receive its callback`() {
+    AndroidLvaAttemptRecord.launch(STATE, "logger1", "treatment")
+    // What a new attempt that isn't enhanced does at launch.
+    AndroidLvaAttemptRecord.clearActive()
+
+    val activity = receiveCallback(STATE)
+    assertThat(activity.isFinishing).isTrue
+    assertThat(Shadows.shadowOf(activity).nextStartedActivityForResult).isNull()
   }
 }

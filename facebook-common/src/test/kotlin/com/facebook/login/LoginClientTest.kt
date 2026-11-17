@@ -8,6 +8,8 @@
 
 package com.facebook.login
 
+import android.content.Context
+import android.net.Uri
 import androidx.fragment.app.Fragment
 import androidx.test.core.app.ApplicationProvider
 import com.facebook.AccessToken
@@ -43,6 +45,11 @@ class LoginClientTest : FacebookPowerMockTestCase() {
     whenever(FacebookSdk.getAutoLogAppEventsEnabled()).thenReturn(false)
     whenever(FacebookSdk.getApplicationContext())
         .thenReturn(ApplicationProvider.getApplicationContext())
+    ApplicationProvider.getApplicationContext<Context>()
+        .getSharedPreferences("com.facebook.login.AndroidLvaAttemptRecord", Context.MODE_PRIVATE)
+        .edit()
+        .clear()
+        .commit()
   }
 
   @Test
@@ -101,6 +108,62 @@ class LoginClientTest : FacebookPowerMockTestCase() {
     assertThat(unparceledRequest.androidLvaClientArm).isEqualTo("treatment")
     assertThat(checkNotNull(TestUtils.parcelAndUnparcel(createRequest())).androidLvaClientArm)
         .isNull()
+  }
+
+  @Test
+  fun testRequestParcelingWithAndroidLvaLaunch() {
+    val request = createRequest()
+    request.androidLvaLaunchState = "state1"
+    request.androidLvaLaunchNonce = "nonce1"
+    val unparceledRequest = checkNotNull(TestUtils.parcelAndUnparcel(request))
+    assertThat(unparceledRequest.androidLvaLaunchState).isEqualTo("state1")
+    assertThat(unparceledRequest.androidLvaLaunchNonce).isEqualTo("nonce1")
+  }
+
+  private fun completeAndroidLvaLaunch(
+      record: AndroidLvaAttemptRecord.Record,
+      launchNonce: String = record.launchNonce
+  ) {
+    val request =
+        createRequest().apply {
+          androidLvaLaunchState = record.state
+          androidLvaLaunchNonce = launchNonce
+        }
+    val client = LoginClient(mockFragment)
+    client.pendingRequest = request
+    client.onCompletedListener = mock()
+    client.complete(LoginClient.Result.createCancelResult(request, "User canceled log in."))
+  }
+
+  @Test
+  fun testCompletingAnAndroidLvaLaunchClearsItsRecord() {
+    val record = checkNotNull(AndroidLvaAttemptRecord.launch("state1", "5678", "treatment"))
+    // Continue keeps the launch nonce and moves the version on.
+    AndroidLvaAttemptRecord.enterPending(record.state, record.version)
+    AndroidLvaAttemptRecord.continueLaunch(record.state, record.version)
+    completeAndroidLvaLaunch(record)
+    assertThat(AndroidLvaAttemptRecord.read()).isNull()
+  }
+
+  @Test
+  fun testCompletingALaunchWhoseRemovalFailsStillRejectsItsCallback() {
+    val context = ApplicationProvider.getApplicationContext<Context>()
+    val record = checkNotNull(AndroidLvaAttemptRecord.launch("{\"lva\":1}", "5678", "treatment"))
+    val failingContext = failingAndroidLvaRecordWrites(context)
+    whenever(FacebookSdk.getApplicationContext()).thenReturn(failingContext)
+    completeAndroidLvaLaunch(record)
+    assertThat(AndroidLvaAttemptRecord.read()).isNull()
+    assertThat(
+            AndroidLvaCallbackCheck.check(
+                "fbconnect://cct.com.example.app#state=${Uri.encode(record.state)}"))
+        .isEqualTo(AndroidLvaCallbackCheck.Result.Rejected)
+  }
+
+  @Test
+  fun testCompletingAnotherLaunchKeepsTheRecord() {
+    val record = checkNotNull(AndroidLvaAttemptRecord.launch("state1", "5678", "treatment"))
+    completeAndroidLvaLaunch(record, launchNonce = "another nonce")
+    assertThat(AndroidLvaAttemptRecord.read()).isEqualTo(record)
   }
 
   @Test

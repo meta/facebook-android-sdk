@@ -72,7 +72,11 @@ class CustomTabMainActivity : Activity() {
 
     if (savedInstanceState == null) {
       val action = intent.getStringExtra(EXTRA_ACTION) ?: return
-      val couldOpenCustomTab = openCustomTab(action, intent.getBundleExtra(EXTRA_PARAMS))
+      val couldOpenCustomTab =
+          openCustomTab(
+              action,
+              intent.getBundleExtra(EXTRA_PARAMS),
+              sendToExternalDefaultHandler = androidLvaState != null)
       // The resume that immediately follows creation is not a return from the custom tab.
       shouldCloseCustomTab = false
       if (!couldOpenCustomTab) {
@@ -179,7 +183,11 @@ class CustomTabMainActivity : Activity() {
   }
 
   /** Opens the custom tab; on failure, sets the no-activity result and finishes. */
-  private fun openCustomTab(action: String, parameters: Bundle?): Boolean {
+  private fun openCustomTab(
+      action: String,
+      parameters: Bundle?,
+      sendToExternalDefaultHandler: Boolean = false
+  ): Boolean {
     val chromePackage = intent.getStringExtra(EXTRA_CHROME_PACKAGE)
     val targetApp = fromString(intent.getStringExtra(EXTRA_TARGET_APP))
     val customTab: CustomTab =
@@ -187,11 +195,13 @@ class CustomTabMainActivity : Activity() {
           LoginTargetApp.INSTAGRAM -> InstagramCustomTab(action, parameters)
           else -> CustomTab(action, parameters)
         }
-    val couldOpenCustomTab = customTab.openCustomTab(this, chromePackage)
+    val couldOpenCustomTab =
+        customTab.openCustomTab(this, chromePackage, sendToExternalDefaultHandler)
     if (!couldOpenCustomTab) {
       // Continue can fail after the first launch registered the redirect receiver.
       unregisterRedirectReceiver()
-      setResult(RESULT_CANCELED, intent.putExtra(NO_ACTIVITY_EXCEPTION, true))
+      setResult(
+          RESULT_CANCELED, withAndroidLvaResultExtras(intent.putExtra(NO_ACTIVITY_EXCEPTION, true)))
       finish()
     }
     return couldOpenCustomTab
@@ -284,11 +294,22 @@ class CustomTabMainActivity : Activity() {
       val responseURL = resultIntent.getStringExtra(EXTRA_URL)
       val results = if (responseURL != null) parseResponseUri(responseURL) else Bundle()
       val nativeProtocolResultIntent = createProtocolResultIntent(intent, results, null)
-      setResult(resultCode, nativeProtocolResultIntent ?: resultIntent)
+      setResult(resultCode, withAndroidLvaResultExtras(nativeProtocolResultIntent ?: resultIntent))
     } else {
-      setResult(resultCode, createProtocolResultIntent(intent, null, null))
+      setResult(
+          resultCode, withAndroidLvaResultExtras(createProtocolResultIntent(intent, null, null)))
     }
     finish()
+  }
+
+  /** Every result of an Android SDK LVA attempt identifies its launch. */
+  private fun withAndroidLvaResultExtras(result: Intent?): Intent? {
+    val state = androidLvaState
+    val launchNonce = intent.getStringExtra(EXTRA_ANDROID_LVA_LAUNCH_NONCE)
+    if (state == null || launchNonce == null) {
+      return result
+    }
+    return AndroidLvaAttemptRecord.putResultExtras(result ?: Intent(), state, launchNonce)
   }
 
   @RequiresApi(Build.VERSION_CODES.TIRAMISU)
@@ -316,6 +337,8 @@ class CustomTabMainActivity : Activity() {
     // Set by the Custom Tab handler for an Android SDK LVA attempt in scope.
     internal val EXTRA_ANDROID_LVA_STATE =
         CustomTabMainActivity::class.java.simpleName + ".extra_android_lva_state"
+    internal val EXTRA_ANDROID_LVA_LAUNCH_NONCE =
+        CustomTabMainActivity::class.java.simpleName + ".extra_android_lva_launch_nonce"
     // The Android SDK LVA sso values: an attempt in scope sends ANDROID_LVA_SSO (may be routed to
     // LVA); Continue sends ANDROID_LVA_PACKAGE_ONLY_SSO (never routed). Both are closed strictly.
     internal const val ANDROID_LVA_SSO = "chrome_custom_tab_lva"

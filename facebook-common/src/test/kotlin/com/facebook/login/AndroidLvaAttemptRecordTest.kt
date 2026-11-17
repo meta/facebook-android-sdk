@@ -166,6 +166,32 @@ class AndroidLvaAttemptRecordTest : FacebookPowerMockTestCase() {
   }
 
   @Test
+  fun `a clear whose removal fails still ends the attempt in this process`() {
+    val record = launch()
+    val failingContext = failingAndroidLvaRecordWrites(context)
+    whenever(FacebookSdk.getApplicationContext()).thenReturn(failingContext)
+    assertThat(AndroidLvaAttemptRecord.clearIf(record.state, record.version)).isTrue
+    assertThat(AndroidLvaAttemptRecord.read()).isNull()
+    assertThat(AndroidLvaAttemptRecord.clearIf(record.state, record.version)).isFalse
+
+    // The stored record is still there, but a new launch replaces it as usual.
+    whenever(FacebookSdk.getApplicationContext()).thenReturn(context)
+    assertThat(prefs.getString("active_attempt", null)).isNotNull
+    val next = launch(state = "state2")
+    assertThat(AndroidLvaAttemptRecord.read()).isEqualTo(next)
+  }
+
+  @Test
+  fun `clearActive clears whatever attempt is active`() {
+    assertThat(AndroidLvaAttemptRecord.clearActive()).isFalse
+    val record = launch()
+    AndroidLvaAttemptRecord.enterPending(record.state, record.version, NOW)
+    AndroidLvaAttemptRecord.continueLaunch(record.state, record.version, NOW)
+    assertThat(AndroidLvaAttemptRecord.clearActive()).isTrue
+    assertThat(AndroidLvaAttemptRecord.read()).isNull()
+  }
+
+  @Test
   fun `an unreadable record counts as none`() {
     prefs.edit().putString("active_attempt", "{not json").commit()
     assertThat(AndroidLvaAttemptRecord.read()).isNull()

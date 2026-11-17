@@ -272,6 +272,15 @@ open class LoginClient : Parcelable {
   }
 
   fun complete(outcome: Result) {
+    // The attempt is terminal: an Android SDK LVA launch's record is cleared, so a late callback
+    // for it is rejected at the entry points.
+    pendingRequest?.let { request ->
+      val state = request.androidLvaLaunchState
+      val nonce = request.androidLvaLaunchNonce
+      if (state != null && nonce != null) {
+        AndroidLvaAttemptRecord.clearLaunch(state, nonce)
+      }
+    }
     val handler = getCurrentHandler()
 
     // This might be null if, for some reason, none of the handlers were successfully tried
@@ -405,6 +414,9 @@ open class LoginClient : Parcelable {
     var androidSsoContext: String? = null
     // The Android SDK LVA client arm, assigned once when the Custom Tab attempt starts.
     var androidLvaClientArm: String? = null
+    // The Android SDK LVA launch of an attempt in scope: its state and launch nonce.
+    var androidLvaLaunchState: String? = null
+    var androidLvaLaunchNonce: String? = null
     val nonce: String
     val codeVerifier: String?
     val codeChallenge: String?
@@ -497,6 +509,8 @@ open class LoginClient : Parcelable {
       val codeChallengeMethodEnumVal = parcel.readString()
       codeChallengeMethod = codeChallengeMethodEnumVal?.let { CodeChallengeMethod.valueOf(it) }
       androidLvaClientArm = parcel.readString()
+      androidLvaLaunchState = parcel.readString()
+      androidLvaLaunchNonce = parcel.readString()
     }
 
     override fun describeContents(): Int = 0
@@ -525,6 +539,8 @@ open class LoginClient : Parcelable {
       dest.writeString(codeChallenge)
       dest.writeString(codeChallengeMethod?.name)
       dest.writeString(androidLvaClientArm)
+      dest.writeString(androidLvaLaunchState)
+      dest.writeString(androidLvaLaunchNonce)
     }
 
     companion object {

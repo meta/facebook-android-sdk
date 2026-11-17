@@ -263,6 +263,12 @@ open class LoginManager() {
           loggingExtras = mapOf(AndroidLvaClientArm.LOGGING_EXTRA to launch.arm)
           androidLvaAuthId = launch.authLoggerId
           AndroidLvaAttemptRecord.clearIf(launch.state, launch.version)
+        } else if (data.hasExtra(AndroidLvaAttemptRecord.RESULT_EXTRA_STATE) &&
+            data.hasExtra(AndroidLvaAttemptRecord.RESULT_EXTRA_LAUNCH_NONCE)) {
+          // The provisional result of a launch whose record is gone: what it replaced, no data,
+          // was a cancel.
+          isCanceled = true
+          code = LoginClient.Result.Code.CANCEL
         }
       }
     } else if (resultCode == Activity.RESULT_CANCELED) {

@@ -11,6 +11,7 @@ package com.facebook.login
 import android.app.Activity
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageInfo
 import android.content.pm.PackageManager
 import android.content.pm.ResolveInfo
 import android.content.pm.ServiceInfo
@@ -36,7 +37,9 @@ import org.junit.Test
 import org.mockito.kotlin.any
 import org.mockito.kotlin.anyOrNull
 import org.mockito.kotlin.argumentCaptor
+import org.mockito.kotlin.eq
 import org.mockito.kotlin.mock
+import org.mockito.kotlin.never
 import org.mockito.kotlin.verify
 import org.mockito.kotlin.whenever
 import org.powermock.api.mockito.PowerMockito
@@ -257,6 +260,130 @@ class CustomTabLoginMethodHandlerTest : LoginHandlerTestCase() {
         val handler = CustomTabLoginMethodHandler(mockLoginClient)
         handler.tryAuthorize(request)
         assertThat(request.androidLvaClientArm).isNull()
+    }
+
+    /**
+     * An attempt that is in scope: the gate on without the client experiment, a minimum Chrome
+     * version, an eligible device and a request with the default redirect. Only the default
+     * redirect has a redirect activity, so the handler sends it.
+     */
+    private fun setUpAndroidLvaLaunchInScope(): LoginClient.Request {
+        setUpAndroidLvaGate(gateOn)
+        whenever(Validate.hasCustomTabRedirectActivity(anyOrNull(), anyOrNull())).thenAnswer {
+            it.getArgument<String?>(1)?.startsWith("fbconnect://cct.") == true
+        }
+        whenever(activity.packageName).thenReturn("com.example.app")
+        val packageManager = activity.packageManager
+        whenever(packageManager.getPackageInfo(eq("com.facebook.katana"), any<Int>()))
+            .thenThrow(PackageManager.NameNotFoundException())
+        whenever(packageManager.getPackageInfo(eq("com.facebook.wakizashi"), any<Int>()))
+            .thenThrow(PackageManager.NameNotFoundException())
+        whenever(packageManager.resolveActivity(any<Intent>(), any<Int>()))
+            .thenReturn(ResolveInfo())
+        activity.getSharedPreferences(
+            "com.facebook.login.AndroidLvaAttemptRecord", Context.MODE_PRIVATE)
+            .edit()
+            .clear()
+            .commit()
+        return LoginClient.Request(
+            LoginBehavior.NATIVE_WITH_FALLBACK,
+            HashSet(PERMISSIONS),
+            DefaultAudience.FRIENDS,
+            "rerequest",
+            request.applicationId,
+            "5678",
+            LoginTargetApp.FACEBOOK)
+    }
+
+    private fun startedCustomTabIntent(): Intent {
+        val intents = argumentCaptor<Intent>()
+        @Suppress("DEPRECATION")
+        verify(mockLoginClient.fragment!!).startActivityForResult(intents.capture(), any())
+        return intents.firstValue
+    }
+
+    @Test
+    fun testTryAuthorizeLaunchesAnAndroidLvaAttemptInScope() {
+        val lvaRequest = setUpAndroidLvaLaunchInScope()
+        val handler = CustomTabLoginMethodHandler(mockLoginClient)
+        assertThat(handler.tryAuthorize(lvaRequest)).isEqualTo(1)
+
+        val record = checkNotNull(AndroidLvaAttemptRecord.read())
+        val state = JSONObject(record.state)
+        assertThat(state.getInt(AndroidLvaCallbackCheck.STATE_DISCRIMINATOR)).isEqualTo(1)
+        assertThat(state.getString(LoginLogger.EVENT_PARAM_AUTH_LOGGER_ID)).isEqualTo("5678")
+        assertThat(record.authLoggerId).isEqualTo("5678")
+        assertThat(record.arm).isEqualTo(AndroidLvaClientArm.TREATMENT)
+
+        val launch = startedCustomTabIntent()
+        val params = checkNotNull(launch.getBundleExtra(CustomTabMainActivity.EXTRA_PARAMS))
+        assertThat(params.getString("sso")).isEqualTo(CustomTabMainActivity.ANDROID_LVA_SSO)
+        assertThat(params.getString("state")).isEqualTo(record.state)
+        assertThat(params.getString("redirect_uri")).isEqualTo("fbconnect://cct.com.example.app")
+        assertThat(launch.getStringExtra(CustomTabMainActivity.EXTRA_ANDROID_LVA_STATE))
+            .isEqualTo(record.state)
+        assertThat(launch.getStringExtra(CustomTabMainActivity.EXTRA_ANDROID_LVA_LAUNCH_NONCE))
+            .isEqualTo(record.launchNonce)
+        assertThat(lvaRequest.androidLvaLaunchState).isEqualTo(record.state)
+        assertThat(lvaRequest.androidLvaLaunchNonce).isEqualTo(record.launchNonce)
+
+        val results = argumentCaptor<Intent>()
+        verify(activity).setResult(eq(Activity.RESULT_CANCELED), results.capture())
+        assertThat(results.firstValue.getStringExtra(AndroidLvaAttemptRecord.RESULT_EXTRA_STATE))
+            .isEqualTo(record.state)
+        assertThat(
+            results.firstValue.getStringExtra(AndroidLvaAttemptRecord.RESULT_EXTRA_LAUNCH_NONCE))
+            .isEqualTo(record.launchNonce)
+    }
+
+    private fun assertUnenhanced(lvaRequest: LoginClient.Request) {
+        val launch = startedCustomTabIntent()
+        val params = checkNotNull(launch.getBundleExtra(CustomTabMainActivity.EXTRA_PARAMS))
+        assertThat(params.getString("sso")).isEqualTo("chrome_custom_tab")
+        assertThat(JSONObject(checkNotNull(params.getString("state"))).has("lva")).isFalse
+        assertThat(launch.hasExtra(CustomTabMainActivity.EXTRA_ANDROID_LVA_STATE)).isFalse
+        assertThat(launch.hasExtra(CustomTabMainActivity.EXTRA_ANDROID_LVA_LAUNCH_NONCE)).isFalse
+        assertThat(lvaRequest.androidLvaLaunchState).isNull()
+        assertThat(lvaRequest.androidLvaLaunchNonce).isNull()
+        verify(activity, never()).setResult(any(), any())
+    }
+
+    @Test
+    fun testTryAuthorizeOfAnUnenhancedAttemptClearsAnOlderAttempt() {
+        setUpAndroidLvaLaunchInScope()
+        AndroidLvaAttemptRecord.launch("{\"lva\":1}", "older", AndroidLvaClientArm.TREATMENT)
+        val handler = CustomTabLoginMethodHandler(mockLoginClient)
+        // createRequest sets its own redirect URI, so the attempt is out of scope.
+        assertThat(handler.tryAuthorize(request)).isEqualTo(1)
+        assertUnenhanced(request)
+        assertThat(AndroidLvaAttemptRecord.read()).isNull()
+    }
+
+    @Test
+    fun testTryAuthorizeWithADeveloperRedirectIsUnenhanced() {
+        setUpAndroidLvaLaunchInScope()
+        val handler = CustomTabLoginMethodHandler(mockLoginClient)
+        // createRequest sets its own redirect URI.
+        assertThat(handler.tryAuthorize(request)).isEqualTo(1)
+        assertUnenhanced(request)
+        assertThat(AndroidLvaAttemptRecord.read()).isNull()
+    }
+
+    @Test
+    fun testTryAuthorizeIsUnenhancedWhenTheRecordCantBeStored() {
+        val lvaRequest = setUpAndroidLvaLaunchInScope()
+        val context: Context = ApplicationProvider.getApplicationContext()
+        whenever(activity.getSharedPreferences(any(), any())).thenAnswer {
+            val name: String = it.getArgument(0)
+            if (name == "com.facebook.login.AndroidLvaAttemptRecord") {
+                throw RuntimeException("storage unavailable")
+            }
+            context.getSharedPreferences(name, it.getArgument(1))
+        }
+        val handler = CustomTabLoginMethodHandler(mockLoginClient)
+        assertThat(handler.tryAuthorize(lvaRequest)).isEqualTo(1)
+        assertThat(lvaRequest.androidLvaClientArm).isEqualTo(AndroidLvaClientArm.TREATMENT)
+        assertUnenhanced(lvaRequest)
     }
 
     private fun mockChromeCustomTabsSupported(supported: Boolean, packageName: String) {

@@ -24,10 +24,20 @@ import com.facebook.login.CustomTabPrefetchHelper
 @AutoHandleExceptions
 open class CustomTab(action: String, parameters: Bundle?) {
   protected var uri: Uri
-  fun openCustomTab(activity: Activity, packageName: String?): Boolean {
+  @JvmOverloads
+  fun openCustomTab(
+      activity: Activity,
+      packageName: String?,
+      sendToExternalDefaultHandler: Boolean = false
+  ): Boolean {
     val session = CustomTabPrefetchHelper.getPreparedSessionOnce()
     val customTabsIntent = CustomTabsIntent.Builder(session).build()
     customTabsIntent.intent.setPackage(packageName)
+    if (sendToExternalDefaultHandler) {
+      // Android SDK LVA: lets LVA's hand-off leave the Custom Tab for Instagram. The raw extra,
+      // because the bundled androidx.browser predates its builder method.
+      customTabsIntent.intent.putExtra(EXTRA_SEND_TO_EXTERNAL_DEFAULT_HANDLER, true)
+    }
     try {
       customTabsIntent.launchUrl(activity, uri)
     } catch (e: ActivityNotFoundException) {
@@ -37,6 +47,9 @@ open class CustomTab(action: String, parameters: Bundle?) {
   }
 
   companion object {
+    internal const val EXTRA_SEND_TO_EXTERNAL_DEFAULT_HANDLER =
+        "android.support.customtabs.extra.SEND_TO_EXTERNAL_HANDLER"
+
     // `open` keeps the JVM static non-final so Java subclasses can hide it.
     @Suppress("NON_FINAL_MEMBER_IN_OBJECT")
     @JvmStatic

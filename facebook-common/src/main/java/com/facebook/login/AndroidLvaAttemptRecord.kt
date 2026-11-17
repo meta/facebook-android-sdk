@@ -9,6 +9,7 @@
 package com.facebook.login
 
 import android.content.Context
+import android.content.Intent
 import android.content.SharedPreferences
 import androidx.annotation.VisibleForTesting
 import com.facebook.FacebookSdk
@@ -25,6 +26,10 @@ import org.json.JSONObject
  * Every change rechecks the attempt's state and version, so an older activity or a stale cleanup
  * can never change or erase a newer attempt, or one that Continue refreshed. Nothing here throws: a
  * failed write returns null or false, and a failed read means no record.
+ *
+ * A cleared attempt is terminal even if its removal fails: its launch nonce is remembered in
+ * memory and its record then reads as none. After process death such a record lasts
+ * only until its expiry.
  */
 internal object AndroidLvaAttemptRecord {
   /** The extras every enhanced attempt's result Intent carries, so its launch can be identified. */
@@ -37,6 +42,8 @@ internal object AndroidLvaAttemptRecord {
   internal const val ACTIVE_ATTEMPT = "active_attempt"
   private val LAUNCH_WINDOW_MS = TimeUnit.MINUTES.toMillis(30)
   private val PENDING_WINDOW_MS = TimeUnit.MINUTES.toMillis(10)
+  // Only one record is ever stored, so remembering the last cleared one is enough.
+  private var terminalLaunchNonce: String? = null
 
   enum class Phase {
     LAUNCHED,
@@ -107,11 +114,17 @@ internal object AndroidLvaAttemptRecord {
             expiresAt = now + LAUNCH_WINDOW_MS))
   }
 
-  /** The stored record, live or expired, or null if there is none or it can't be read. */
+  /**
+   * The stored record, live or expired, or null if there is none, it can't be read or it was
+   * cleared.
+   */
   @Synchronized
   fun read(): Record? =
       try {
-        getPreferences()?.getString(ACTIVE_ATTEMPT, null)?.let { parse(JSONObject(it)) }
+        getPreferences()
+            ?.getString(ACTIVE_ATTEMPT, null)
+            ?.let { parse(JSONObject(it)) }
+            ?.takeUnless { it.launchNonce == terminalLaunchNonce }
       } catch (e: Exception) {
         null
       }
@@ -123,7 +136,7 @@ internal object AndroidLvaAttemptRecord {
    * Removes the record only if both [state] and [version] still match. A caller that is clearing an
    * expired record passes [expiredAt], its current time: the record is then removed only if it is
    * still expired, because entering PENDING extends the expiry without changing the version.
-   * Returns whether it removed one.
+   * Returns whether it cleared one; a cleared attempt is terminal even if its removal failed.
    */
   @Synchronized
   fun clearIf(state: String, version: Int, expiredAt: Long? = null): Boolean {
@@ -133,12 +146,41 @@ internal object AndroidLvaAttemptRecord {
         (expiredAt != null && isLive(record, expiredAt))) {
       return false
     }
-    return try {
-      getPreferences()?.edit()?.remove(ACTIVE_ATTEMPT)?.commit() ?: false
+    terminalLaunchNonce = record.launchNonce
+    try {
+      getPreferences()?.edit()?.remove(ACTIVE_ATTEMPT)?.commit()
     } catch (e: Exception) {
-      false
+      // The attempt is still terminal in this process, and its record expires.
     }
+    return true
   }
+
+  /**
+   * Clears whatever attempt is active. A new attempt that isn't enhanced calls this, so an older
+   * attempt's callback can't reach the newer Custom Tab. Returns whether it cleared one.
+   */
+  @Synchronized
+  fun clearActive(): Boolean {
+    val record = read() ?: return false
+    return clearIf(record.state, record.version)
+  }
+
+  /**
+   * Clears the record of the launch identified by [state] and [launchNonce], whatever its current
+   * version after Continue. Returns whether it removed one.
+   */
+  @Synchronized
+  fun clearLaunch(state: String, launchNonce: String): Boolean {
+    val record = read() ?: return false
+    if (record.state != state || record.launchNonce != launchNonce) {
+      return false
+    }
+    return clearIf(record.state, record.version)
+  }
+
+  /** Adds the extras that identify a launch to a result Intent. */
+  fun putResultExtras(intent: Intent, state: String, launchNonce: String): Intent =
+      intent.putExtra(RESULT_EXTRA_STATE, state).putExtra(RESULT_EXTRA_LAUNCH_NONCE, launchNonce)
 
   private fun readMatching(state: String, version: Int, now: Long): Record? =
       read()?.takeIf { it.state == state && it.version == version && isLive(it, now) }

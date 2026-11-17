@@ -22,6 +22,7 @@ import androidx.browser.customtabs.CustomTabsIntent
 import androidx.localbroadcastmanager.content.LocalBroadcastManager
 import androidx.test.core.app.ApplicationProvider
 import com.facebook.common.R
+import com.facebook.internal.CustomTab
 import com.facebook.login.AndroidLvaAttemptRecord
 import java.util.concurrent.TimeUnit
 import org.assertj.core.api.Assertions.assertThat
@@ -30,6 +31,7 @@ import org.mockito.kotlin.any
 import org.mockito.kotlin.anyOrNull
 import org.mockito.kotlin.argumentCaptor
 import org.mockito.kotlin.atLeastOnce
+import org.mockito.kotlin.doAnswer
 import org.mockito.kotlin.doNothing
 import org.mockito.kotlin.doThrow
 import org.mockito.kotlin.eq
@@ -459,5 +461,77 @@ class CustomTabMainActivityAndroidLvaTest : FacebookPowerMockTestCase() {
     val record = checkNotNull(AndroidLvaAttemptRecord.read())
     assertThat(record.version).isEqualTo(2)
     assertThat(record.phase).isEqualTo(AndroidLvaAttemptRecord.Phase.LAUNCHED)
+  }
+
+  /** Records, for each custom tab launch, whether it asked for the external default handler. */
+  private fun recordExternalHandlerExtras(): List<Boolean> {
+    val extras = mutableListOf<Boolean>()
+    doAnswer {
+          val tabIntent = mockCustomTabsIntent.intent
+          extras.add(
+              tabIntent.getBooleanExtra(CustomTab.EXTRA_SEND_TO_EXTERNAL_DEFAULT_HANDLER, false))
+          tabIntent.removeExtra(CustomTab.EXTRA_SEND_TO_EXTERNAL_DEFAULT_HANDLER)
+          null
+        }
+        .whenever(mockCustomTabsIntent)
+        .launchUrl(any(), any())
+    return extras
+  }
+
+  @Test
+  fun `only the first launch of an attempt in scope asks for the external default handler`() {
+    launchRecord()
+    val extras = recordExternalHandlerExtras()
+    val activity = returnAndShowActions()
+
+    activity.pendingButton(R.id.com_facebook_android_lva_pending_continue).performClick()
+    assertThat(extras).containsExactly(true, false)
+  }
+
+  @Test
+  fun `an ordinary launch doesn't ask for the external default handler`() {
+    launchIntent.removeExtra(CustomTabMainActivity.EXTRA_ANDROID_LVA_STATE)
+    val extras = recordExternalHandlerExtras()
+    Robolectric.buildActivity(CustomTabMainActivity::class.java, launchIntent).create(null)
+
+    assertThat(extras).containsExactly(false)
+  }
+
+  @Test
+  fun `the results of an attempt in scope identify its launch`() {
+    val record = checkNotNull(AndroidLvaAttemptRecord.launch(STATE, "logger1", "treatment"))
+    launchIntent.putExtra(CustomTabMainActivity.EXTRA_ANDROID_LVA_LAUNCH_NONCE, record.launchNonce)
+    val activity = returnAndShowActions()
+
+    activity.pendingButton(R.id.com_facebook_android_lva_pending_cancel).performClick()
+    val result = Shadows.shadowOf(activity).resultIntent
+    assertThat(result.getStringExtra(AndroidLvaAttemptRecord.RESULT_EXTRA_STATE)).isEqualTo(STATE)
+    assertThat(result.getStringExtra(AndroidLvaAttemptRecord.RESULT_EXTRA_LAUNCH_NONCE))
+        .isEqualTo(record.launchNonce)
+  }
+
+  @Test
+  fun `a failed first launch of an attempt in scope identifies its launch`() {
+    val record = checkNotNull(AndroidLvaAttemptRecord.launch(STATE, "logger1", "treatment"))
+    launchIntent.putExtra(CustomTabMainActivity.EXTRA_ANDROID_LVA_LAUNCH_NONCE, record.launchNonce)
+    doThrow(ActivityNotFoundException()).whenever(mockCustomTabsIntent).launchUrl(any(), any())
+    activityController = Robolectric.buildActivity(CustomTabMainActivity::class.java, launchIntent)
+    val activity = activityController.create(null).get()
+
+    val result = Shadows.shadowOf(activity).resultIntent
+    assertThat(result.getBooleanExtra(CustomTabMainActivity.NO_ACTIVITY_EXCEPTION, false)).isTrue
+    assertThat(result.getStringExtra(AndroidLvaAttemptRecord.RESULT_EXTRA_LAUNCH_NONCE))
+        .isEqualTo(record.launchNonce)
+  }
+
+  @Test
+  fun `an ordinary attempt's results carry no launch extras`() {
+    launchIntent.removeExtra(CustomTabMainActivity.EXTRA_ANDROID_LVA_STATE)
+    launchIntent.putExtra(CustomTabMainActivity.EXTRA_ANDROID_LVA_LAUNCH_NONCE, "nonce")
+    val activity = returnWithoutResult()
+
+    val result = Shadows.shadowOf(activity).resultIntent
+    assertThat(activity.isFinishing).isTrue
+    assertThat(result?.hasExtra(AndroidLvaAttemptRecord.RESULT_EXTRA_STATE) ?: false).isFalse
   }
 }

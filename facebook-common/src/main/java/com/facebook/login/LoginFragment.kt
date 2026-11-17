@@ -94,6 +94,7 @@ open class LoginFragment : Fragment() {
       savedInstanceState: Bundle?
   ): View? {
     val view = inflater.inflate(layoutResId, container, false)
+    activity?.let { restoreAndroidLvaProvisionalResult(it, loginClient.pendingRequest) }
     progressBar = view.findViewById<View>(R.id.com_facebook_login_fragment_progress_bar)
     loginClient.backgroundProcessingListener =
         object : LoginClient.BackgroundProcessingListener {
@@ -111,6 +112,21 @@ open class LoginFragment : Fragment() {
   @get:LayoutRes
   protected open val layoutResId: Int
     get() = R.layout.com_facebook_login_fragment
+
+  // An activity's result doesn't survive its recreation, so the provisional result that identifies
+  // a running Android SDK LVA launch is set again on every new host. This runs from onCreateView,
+  // not onCreate: FacebookActivity retains this fragment, so a configuration change it doesn't
+  // handle (locale, UI mode) recreates the host without calling onCreate again.
+  private fun restoreAndroidLvaProvisionalResult(
+      activity: Activity,
+      pendingRequest: LoginClient.Request?
+  ) {
+    val state = pendingRequest?.androidLvaLaunchState ?: return
+    val launchNonce = pendingRequest.androidLvaLaunchNonce ?: return
+    activity.setResult(
+        Activity.RESULT_CANCELED,
+        AndroidLvaAttemptRecord.putResultExtras(Intent(), state, launchNonce))
+  }
 
   private fun onLoginClientCompleted(outcome: LoginClient.Result) {
     request = null

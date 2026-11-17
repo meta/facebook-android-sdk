@@ -60,5 +60,17 @@ class CustomTabTest : FacebookPowerMockTestCase() {
     val customTab = CustomTab(CustomTabLoginMethodHandler.OAUTH_DIALOG, parameters)
     customTab.openCustomTab(mock(), "com.facebook.internal")
     verify(mockCustomTabsIntent).launchUrl(any(), any())
+    val tabIntent = mockCustomTabsIntent.intent
+    assertThat(tabIntent.hasExtra(CustomTab.EXTRA_SEND_TO_EXTERNAL_DEFAULT_HANDLER)).isFalse
+  }
+
+  @Test
+  fun `open custom tab can ask for the external default handler`() {
+    val customTab = CustomTab(CustomTabLoginMethodHandler.OAUTH_DIALOG, parameters)
+    customTab.openCustomTab(mock(), "com.android.chrome", sendToExternalDefaultHandler = true)
+    assertThat(
+            mockCustomTabsIntent.intent.getBooleanExtra(
+                "android.support.customtabs.extra.SEND_TO_EXTERNAL_HANDLER", false))
+        .isTrue
   }
 }
