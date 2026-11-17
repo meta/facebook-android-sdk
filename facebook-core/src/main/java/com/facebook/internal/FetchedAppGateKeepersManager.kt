@@ -36,9 +36,11 @@ import org.json.JSONObject
 @RestrictTo(RestrictTo.Scope.LIBRARY_GROUP)
 object FetchedAppGateKeepersManager {
     private const val TAG = "FetchedAppGateKeepersManager"
-    private const val APP_GATEKEEPERS_PREFS_STORE =
+    @VisibleForTesting(otherwise = VisibleForTesting.PRIVATE)
+    internal const val APP_GATEKEEPERS_PREFS_STORE =
         "com.facebook.internal.preferences.APP_GATEKEEPERS"
-    private const val APP_GATEKEEPERS_PREFS_KEY_FORMAT = "com.facebook.internal.APP_GATEKEEPERS.%s"
+    @VisibleForTesting(otherwise = VisibleForTesting.PRIVATE)
+    internal const val APP_GATEKEEPERS_PREFS_KEY_FORMAT = "com.facebook.internal.APP_GATEKEEPERS.%s"
     private const val APP_PLATFORM = "android"
     private const val APPLICATION_GATEKEEPER_EDGE = "mobile_sdk_gk"
     private const val APPLICATION_GATEKEEPER_FIELD = "gatekeepers"
@@ -52,8 +54,11 @@ object FetchedAppGateKeepersManager {
     private const val APPLICATION_GATEKEEPER_CACHE_TIMEOUT = 60 * 60 * 1000.toLong()
     @Volatile private var timestamp: Long? = null
 
-    // GateKeeper values in runtime. It may be changed through the UI.
-    @Volatile private var gateKeeperRuntimeCache: GateKeeperRuntimeCache? = null
+    // Preserve session snapshots for gates that select or initialize long-lived SDK modules.
+    private val gateKeeperRuntimeCache = GateKeeperRuntimeCache()
+    private const val METADATA_BASIC_GATEKEEPER = "FBSDKFeatureMetadataBasic"
+    // MetadataBasic is read per event. Track deliberate overrides separately from its snapshot.
+    private val metadataBasicRuntimeOverrides = HashMap<String, Boolean>()
 
     @Synchronized
     private fun getGateKeepersForAppId(applicationId: String): JSONObject? {
@@ -75,7 +80,10 @@ object FetchedAppGateKeepersManager {
         if (callback != null) {
             callbacks.add(callback)
         }
-        val applicationId = FacebookSdk.getApplicationId()
+        val applicationId: String? = FacebookSdk.getApplicationId()
+        if (applicationId == null) {
+            return
+        }
         if (isTimestampValid(timestamp) && getGateKeepersForAppId(applicationId) != null) {
             pollCallbacks()
             return
@@ -88,19 +96,23 @@ object FetchedAppGateKeepersManager {
             return
         }
 
-        // See if we had a cached copy of gatekeepers and use that immediately
+        // Hydrate from disk only before this app has an in-memory value. A refresh publishes
+        // parsed JSON before its disk write/timestamp, so rehydrating on every expired read
+        // could overwrite that fresh response with the previous persisted value.
         val gateKeepersSharedPrefs =
             context.getSharedPreferences(APP_GATEKEEPERS_PREFS_STORE, Context.MODE_PRIVATE)
-        val gateKeepersJSONString = gateKeepersSharedPrefs.getString(gateKeepersKey, null)
-        if (!gateKeepersJSONString.isNullOrEmpty()) {
-            var gateKeepersJSON: JSONObject? = null
-            try {
-                gateKeepersJSON = JSONObject(gateKeepersJSONString)
-            } catch (je: JSONException) {
-                Utility.logd(Utility.LOG_TAG, je)
-            }
-            if (gateKeepersJSON != null) {
-                parseAppGateKeepersFromJSON(applicationId, gateKeepersJSON)
+        if (getGateKeepersForAppId(applicationId) == null) {
+            val gateKeepersJSONString = gateKeepersSharedPrefs.getString(gateKeepersKey, null)
+            if (!gateKeepersJSONString.isNullOrEmpty()) {
+                var gateKeepersJSON: JSONObject? = null
+                try {
+                    gateKeepersJSON = JSONObject(gateKeepersJSONString)
+                } catch (je: JSONException) {
+                    Utility.logd(Utility.LOG_TAG, je)
+                }
+                if (gateKeepersJSON != null) {
+                    parseAppGateKeepersFromJSON(applicationId, gateKeepersJSON)
+                }
             }
         }
         val executor: Executor? = FacebookSdk.getExecutor()
@@ -165,25 +177,29 @@ object FetchedAppGateKeepersManager {
      */
     fun getGateKeepersForApplication(applicationId: String?): Map<String, Boolean> {
         loadAppGateKeepersAsync()
-        if (applicationId == null || getGateKeepersForAppId(applicationId) == null) {
-            return HashMap()
+        if (applicationId == null) {
+            return emptyMap()
         }
-        val cacheList = gateKeeperRuntimeCache?.dumpGateKeepers(applicationId)
-        return if (cacheList != null) {
-            val cacheMap = HashMap<String, Boolean>()
-            cacheList.forEach { cacheMap[it.name] = it.value }
-            cacheMap
-        } else {
-            val output: MutableMap<String, Boolean> = HashMap()
-            val jsonObject: JSONObject = getGateKeepersForAppId(applicationId) ?: JSONObject()
-            val jsonIterator = jsonObject.keys()
-            while (jsonIterator.hasNext()) {
-                val key = jsonIterator.next()
-                output[key] = jsonObject.optBoolean(key)
+        // Use the same monitor as the static synchronized parser and runtime override methods.
+        return synchronized(FetchedAppGateKeepersManager::class.java) {
+            val jsonObject = getGateKeepersForAppId(applicationId) ?: return@synchronized emptyMap()
+            val output = HashMap<String, Boolean>()
+            val runtimeValues = gateKeeperRuntimeCache.dumpGateKeepers(applicationId)
+            if (runtimeValues != null) {
+                runtimeValues.forEach { output[it.name] = it.value }
+            } else {
+                val jsonIterator = jsonObject.keys()
+                while (jsonIterator.hasNext()) {
+                    val key = jsonIterator.next()
+                    output[key] = jsonObject.optBoolean(key)
+                }
+                gateKeeperRuntimeCache.setGateKeepers(
+                    applicationId, output.map { GateKeeper(it.key, it.value) })
             }
-            val runtimeCache = gateKeeperRuntimeCache ?: GateKeeperRuntimeCache()
-            runtimeCache.setGateKeepers(applicationId, output.map { GateKeeper(it.key, it.value) })
-            gateKeeperRuntimeCache = runtimeCache
+            if (jsonObject.has(METADATA_BASIC_GATEKEEPER)) {
+                output[METADATA_BASIC_GATEKEEPER] = metadataBasicRuntimeOverrides[applicationId]
+                    ?: jsonObject.optBoolean(METADATA_BASIC_GATEKEEPER)
+            }
             output
         }
     }
@@ -197,30 +213,39 @@ object FetchedAppGateKeepersManager {
     }
 
     /**
-     * Set GateKeeper values in the runtime cache, so that it will affect GK reading later. Only if GK
-     * exists in the cache, it will be updated.
+     * Override a GateKeeper in the session snapshot, or a fetched MetadataBasic value. Overrides
+     * survive server refreshes until the runtime cache is reset. Unknown GateKeepers are ignored.
      *
      * @param applicationId Application ID
      * @param gateKeeper name-value pair of the Gate Keeper to be set
      */
     @JvmStatic
+    @Synchronized
     fun setRuntimeGateKeeper(
         applicationId: String = FacebookSdk.getApplicationId(),
         gateKeeper: GateKeeper
     ) {
-        if (gateKeeperRuntimeCache?.getGateKeeper(applicationId, gateKeeper.name) != null) {
-            gateKeeperRuntimeCache?.setGateKeeper(applicationId, gateKeeper)
+        val isFetchedMetadataBasic = gateKeeper.name == METADATA_BASIC_GATEKEEPER &&
+            getGateKeepersForAppId(applicationId)?.has(gateKeeper.name) == true
+        if (isFetchedMetadataBasic) {
+            metadataBasicRuntimeOverrides[applicationId] = gateKeeper.value
+        } else if (gateKeeperRuntimeCache.getGateKeeper(applicationId, gateKeeper.name) != null) {
+            gateKeeperRuntimeCache.setGateKeeper(applicationId, gateKeeper)
         } else {
             Log.w(TAG, "Missing gatekeeper runtime cache")
         }
     }
 
-    /**
-     * Invalid runtime GateKeeper cache so that the manager will load original GK values next time.
-     */
+    /** Clear this app's session snapshot and explicit MetadataBasic override. */
     @JvmStatic
+    @Synchronized
     fun resetRuntimeGateKeeperCache() {
-        gateKeeperRuntimeCache?.resetCache()
+        if (!FacebookSdk.isInitialized()) {
+            return
+        }
+        val applicationId = FacebookSdk.getApplicationId()
+        gateKeeperRuntimeCache.resetCache(applicationId)
+        metadataBasicRuntimeOverrides.remove(applicationId)
     }
 
     // Note that this method makes a synchronous Graph API call, so should not be called from the

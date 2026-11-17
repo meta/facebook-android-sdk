@@ -8,6 +8,7 @@
 
 package com.facebook.internal
 
+import android.content.Context
 import androidx.test.core.app.ApplicationProvider
 import com.facebook.FacebookPowerMockTestCase
 import com.facebook.FacebookSdk
@@ -214,26 +215,22 @@ class FetchedAppGateKeepersManagerTest : FacebookPowerMockTestCase() {
 
   @Test
   fun `parseAppGateKeepersFromJSON creates new JSONObject instead of mutating existing one`() {
-    // First parse populates the map
     FetchedAppGateKeepersManager.parseAppGateKeepersFromJSON(APPLICATION_NAME, JSONObject(VALID_JSON))
-
-    // Get a reference to the stored JSONObject
     val fetchedMap = Whitebox.getInternalState<MutableMap<String, JSONObject>>(
         FetchedAppGateKeepersManager::class.java, "fetchedAppGateKeepers")
     val firstObj = fetchedMap[APPLICATION_NAME]!!
+    val refreshed = JSONObject(
+        """{"data":[{"gatekeepers":[{"key":"$GK1","value":false},{"key":"new_key","value":true}]}]}""")
 
-    // Parse again — should replace with a new object, not mutate firstObj
-    FetchedAppGateKeepersManager.parseAppGateKeepersFromJSON(APPLICATION_NAME, JSONObject(VALID_JSON))
+    FetchedAppGateKeepersManager.parseAppGateKeepersFromJSON(APPLICATION_NAME, refreshed)
     val secondObj = fetchedMap[APPLICATION_NAME]!!
 
-    // Key assertion: different object instances (copy-on-write, not mutate-in-place)
     assertThat(secondObj).isNotSameAs(firstObj)
-    // Original object should not have been modified after the second parse
     assertThat(firstObj.getBoolean(GK1)).isTrue
-    assertThat(firstObj.getBoolean(GK2)).isFalse
-    // New object should also have correct values
-    assertThat(secondObj.getBoolean(GK1)).isTrue
+    assertThat(firstObj.has("new_key")).isFalse
+    assertThat(secondObj.getBoolean(GK1)).isFalse
     assertThat(secondObj.getBoolean(GK2)).isFalse
+    assertThat(secondObj.getBoolean("new_key")).isTrue
   }
 
   @Test
@@ -251,7 +248,6 @@ class FetchedAppGateKeepersManagerTest : FacebookPowerMockTestCase() {
         startLatch.await()
         try {
           repeat(100) {
-            // Reset cache so readers go through the JSONObject iteration path
             FetchedAppGateKeepersManager.resetRuntimeGateKeeperCache()
             FetchedAppGateKeepersManager.getGateKeepersForApplication(APPLICATION_NAME)
           }
@@ -261,14 +257,15 @@ class FetchedAppGateKeepersManagerTest : FacebookPowerMockTestCase() {
       })
     }
 
-    // Writer threads that parse and update the map
-    repeat(5) {
+    // Add distinct keys so refreshes change the map structure while readers iterate.
+    repeat(5) { writer ->
       threads.add(Thread {
         startLatch.await()
         try {
-          repeat(100) {
-            FetchedAppGateKeepersManager.parseAppGateKeepersFromJSON(
-                APPLICATION_NAME, JSONObject(VALID_JSON))
+          repeat(100) { update ->
+            val refreshed = JSONObject(
+                """{"data":[{"gatekeepers":[{"key":"new_${writer}_$update","value":true}]}]}""")
+            FetchedAppGateKeepersManager.parseAppGateKeepersFromJSON(APPLICATION_NAME, refreshed)
           }
         } catch (e: Throwable) {
           errors.add(e)
@@ -280,7 +277,246 @@ class FetchedAppGateKeepersManagerTest : FacebookPowerMockTestCase() {
     startLatch.countDown()
     threads.forEach { it.join(5000) }
 
+    assertThat(threads.filter { it.isAlive }).isEmpty()
     assertThat(errors).isEmpty()
+    FetchedAppGateKeepersManager.resetRuntimeGateKeeperCache()
+    assertThat(FetchedAppGateKeepersManager.getGateKeepersForApplication(APPLICATION_NAME))
+        .hasSize(502)
+  }
+
+  private fun metadataResponse(enabled: Boolean): JSONObject =
+      JSONObject("""{"data":[{"gatekeepers":[{"key":"FBSDKFeatureMetadataBasic","value":$enabled}]}]}""")
+
+  private fun assertIapSnapshotPreserved(initiallyEnabled: Boolean) {
+    fun response(metadataEnabled: Boolean, iapEnabled: Boolean) = JSONObject("""
+        {"data":[{"gatekeepers":[
+          {"key":"${FeatureManager.Feature.AppEvents.toKey()}","value":true},
+          {"key":"${FeatureManager.Feature.IapLogging.toKey()}","value":true},
+          {"key":"${FeatureManager.Feature.IapLoggingLib2.toKey()}","value":$iapEnabled},
+          {"key":"${FeatureManager.Feature.MetadataBasic.toKey()}","value":$metadataEnabled}
+        ]}]}
+        """)
+    FetchedAppGateKeepersManager.parseAppGateKeepersFromJSON(
+        APPLICATION_NAME, response(true, initiallyEnabled))
+    assertThat(FeatureManager.isEnabled(FeatureManager.Feature.IapLoggingLib2))
+        .isEqualTo(initiallyEnabled)
+    assertThat(FeatureManager.isEnabled(FeatureManager.Feature.MetadataBasic)).isTrue
+
+    val refreshed = FetchedAppGateKeepersManager.parseAppGateKeepersFromJSON(
+        APPLICATION_NAME, response(false, !initiallyEnabled))
+
+    assertThat(refreshed.getBoolean(FeatureManager.Feature.IapLoggingLib2.toKey()))
+        .isEqualTo(!initiallyEnabled)
+    assertThat(FeatureManager.isEnabled(FeatureManager.Feature.IapLoggingLib2))
+        .isEqualTo(initiallyEnabled)
+    assertThat(FeatureManager.isEnabled(FeatureManager.Feature.MetadataBasic)).isFalse
+  }
+
+  @Test
+  fun `metadata refresh cannot switch IAP from the legacy to the new implementation`() {
+    assertIapSnapshotPreserved(false)
+  }
+
+  @Test
+  fun `metadata refresh cannot switch IAP from the new to the legacy implementation`() {
+    assertIapSnapshotPreserved(true)
+  }
+
+  @Test
+  fun `explicit off metadata override survives an on refresh until reset`() {
+    FetchedAppGateKeepersManager.parseAppGateKeepersFromJSON(
+        APPLICATION_NAME, metadataResponse(false))
+    FetchedAppGateKeepersManager.getGateKeepersForApplication(APPLICATION_NAME)
+    FetchedAppGateKeepersManager.setRuntimeGateKeeper(
+        APPLICATION_NAME, GateKeeper("FBSDKFeatureMetadataBasic", false))
+
+    FetchedAppGateKeepersManager.parseAppGateKeepersFromJSON(
+        APPLICATION_NAME, metadataResponse(true))
+
+    assertThat(FeatureManager.isEnabled(FeatureManager.Feature.MetadataBasic)).isFalse
+    FetchedAppGateKeepersManager.resetRuntimeGateKeeperCache()
+    assertThat(FeatureManager.isEnabled(FeatureManager.Feature.MetadataBasic)).isTrue
+  }
+
+  @Test
+  fun `metadata override before the first read does not truncate the session snapshot`() {
+    FetchedAppGateKeepersManager.parseAppGateKeepersFromJSON(
+        APPLICATION_NAME, JSONObject(VALID_JSON))
+    FetchedAppGateKeepersManager.parseAppGateKeepersFromJSON(
+        APPLICATION_NAME, metadataResponse(true))
+    FetchedAppGateKeepersManager.setRuntimeGateKeeper(
+        APPLICATION_NAME, GateKeeper("FBSDKFeatureMetadataBasic", false))
+
+    val result = FetchedAppGateKeepersManager.getGateKeepersForApplication(APPLICATION_NAME)
+
+    assertThat(result["FBSDKFeatureMetadataBasic"]).isFalse
+    assertThat(result[GK1]).isTrue
+    assertThat(result[GK2]).isFalse
+  }
+
+  @Test
+  fun `metadata feature observes refreshed off without resetting runtime cache`() {
+    FetchedAppGateKeepersManager.parseAppGateKeepersFromJSON(
+        APPLICATION_NAME, metadataResponse(true))
+    assertThat(FeatureManager.isEnabled(FeatureManager.Feature.MetadataBasic)).isTrue
+
+    FetchedAppGateKeepersManager.parseAppGateKeepersFromJSON(
+        APPLICATION_NAME, metadataResponse(false))
+
+    assertThat(FeatureManager.isEnabled(FeatureManager.Feature.MetadataBasic)).isFalse
+  }
+
+  @Test
+  fun `metadata feature observes refreshed on after an initial off read`() {
+    FetchedAppGateKeepersManager.parseAppGateKeepersFromJSON(
+        APPLICATION_NAME, metadataResponse(false))
+    assertThat(FeatureManager.isEnabled(FeatureManager.Feature.MetadataBasic)).isFalse
+
+    FetchedAppGateKeepersManager.parseAppGateKeepersFromJSON(
+        APPLICATION_NAME, metadataResponse(true))
+
+    assertThat(FeatureManager.isEnabled(FeatureManager.Feature.MetadataBasic)).isTrue
+  }
+
+  @Test
+  fun `runtime override and other session values survive refresh until reset`() {
+    FetchedAppGateKeepersManager.parseAppGateKeepersFromJSON(
+        APPLICATION_NAME, JSONObject(VALID_JSON))
+    FetchedAppGateKeepersManager.getGateKeepersForApplication(APPLICATION_NAME)
+    FetchedAppGateKeepersManager.setRuntimeGateKeeper(gateKeeper = GateKeeper(GK1, false))
+    val refreshed = JSONObject(
+        """{"data":[{"gatekeepers":[{"key":"$GK1","value":true},{"key":"$GK2","value":true}]}]}""")
+
+    FetchedAppGateKeepersManager.parseAppGateKeepersFromJSON(APPLICATION_NAME, refreshed)
+
+    val result = FetchedAppGateKeepersManager.getGateKeepersForApplication(APPLICATION_NAME)
+    assertThat(result[GK1]).isFalse
+    assertThat(result[GK2]).isFalse
+
+    FetchedAppGateKeepersManager.resetRuntimeGateKeeperCache()
+    assertThat(FetchedAppGateKeepersManager.getGateKeeperForKey(GK1, APPLICATION_NAME, false))
+        .isTrue
+    assertThat(FetchedAppGateKeepersManager.getGateKeeperForKey(GK2, APPLICATION_NAME, false))
+        .isTrue
+  }
+
+  @Test
+  fun `refresh adds MetadataBasic while other new gatekeepers wait for reset`() {
+    FetchedAppGateKeepersManager.parseAppGateKeepersFromJSON(
+        APPLICATION_NAME, JSONObject(VALID_JSON))
+    val previous = FetchedAppGateKeepersManager.getGateKeepersForApplication(APPLICATION_NAME)
+    val refreshed = JSONObject("""
+        {"data":[{"gatekeepers":[
+          {"key":"FBSDKFeatureMetadataBasic","value":true},
+          {"key":"new_gatekeeper","value":true}
+        ]}]}
+        """)
+
+    FetchedAppGateKeepersManager.parseAppGateKeepersFromJSON(APPLICATION_NAME, refreshed)
+
+    assertThat(FetchedAppGateKeepersManager.getGateKeeperForKey(
+        "FBSDKFeatureMetadataBasic", APPLICATION_NAME, false)).isTrue
+    assertThat(previous).doesNotContainKey("FBSDKFeatureMetadataBasic")
+    assertThat(FetchedAppGateKeepersManager.getGateKeepersForApplication(APPLICATION_NAME))
+        .doesNotContainKey("new_gatekeeper")
+    FetchedAppGateKeepersManager.resetRuntimeGateKeeperCache()
+    assertThat(FetchedAppGateKeepersManager.getGateKeeperForKey(
+        "new_gatekeeper", APPLICATION_NAME, false)).isTrue
+  }
+
+  @Test
+  fun `empty refresh preserves last fetched values and ignores unknown runtime overrides`() {
+    FetchedAppGateKeepersManager.parseAppGateKeepersFromJSON(
+        APPLICATION_NAME, metadataResponse(true))
+    FetchedAppGateKeepersManager.getGateKeepersForApplication(APPLICATION_NAME)
+    FetchedAppGateKeepersManager.setRuntimeGateKeeper(gateKeeper = GateKeeper("unknown", true))
+
+    FetchedAppGateKeepersManager.parseAppGateKeepersFromJSON(
+        APPLICATION_NAME, JSONObject(EMPTY_RESPONSE))
+
+    val result = FetchedAppGateKeepersManager.getGateKeepersForApplication(APPLICATION_NAME)
+    assertThat(result["FBSDKFeatureMetadataBasic"]).isTrue
+    assertThat(result).doesNotContainKey("unknown")
+  }
+
+  @Test
+  fun `runtime override and refreshed values are isolated by application`() {
+    val otherApplication = "other_application"
+    FetchedAppGateKeepersManager.parseAppGateKeepersFromJSON(
+        APPLICATION_NAME, metadataResponse(true))
+    FetchedAppGateKeepersManager.parseAppGateKeepersFromJSON(
+        otherApplication, metadataResponse(true))
+    FetchedAppGateKeepersManager.getGateKeepersForApplication(APPLICATION_NAME)
+    FetchedAppGateKeepersManager.getGateKeepersForApplication(otherApplication)
+    FetchedAppGateKeepersManager.setRuntimeGateKeeper(
+        APPLICATION_NAME, GateKeeper("FBSDKFeatureMetadataBasic", true))
+
+    FetchedAppGateKeepersManager.parseAppGateKeepersFromJSON(
+        APPLICATION_NAME, metadataResponse(false))
+    FetchedAppGateKeepersManager.parseAppGateKeepersFromJSON(
+        otherApplication, metadataResponse(false))
+
+    assertThat(FetchedAppGateKeepersManager.getGateKeeperForKey(
+        "FBSDKFeatureMetadataBasic", APPLICATION_NAME, false)).isTrue
+    assertThat(FetchedAppGateKeepersManager.getGateKeeperForKey(
+        "FBSDKFeatureMetadataBasic", otherApplication, true)).isFalse
+    assertThat(FetchedAppGateKeepersManager.getGateKeepersForApplication(null)).isEmpty()
+  }
+
+  @Test
+  fun `expired read cannot replace a freshly parsed response with older disk values`() {
+    val context = ApplicationProvider.getApplicationContext<Context>()
+    val preferences = context.getSharedPreferences(
+        FetchedAppGateKeepersManager.APP_GATEKEEPERS_PREFS_STORE, Context.MODE_PRIVATE)
+    val preferenceKey = String.format(
+        FetchedAppGateKeepersManager.APP_GATEKEEPERS_PREFS_KEY_FORMAT, APPLICATION_NAME)
+    preferences.edit().putString(preferenceKey, metadataResponse(true).toString()).apply()
+    Whitebox.setInternalState(FetchedAppGateKeepersManager::class.java, "timestamp", null as Long?)
+
+    try {
+      // This is the refresh worker's publication point before its disk write and timestamp update.
+      FetchedAppGateKeepersManager.parseAppGateKeepersFromJSON(
+          APPLICATION_NAME, metadataResponse(false))
+
+      // A normal read interleaves while the disk still contains the previous true response.
+      assertThat(FeatureManager.isEnabled(FeatureManager.Feature.MetadataBasic)).isFalse
+    } finally {
+      preferences.edit().remove(preferenceKey).apply()
+    }
+  }
+
+  @Test
+  fun `missing SDK values keep callbacks queued without scheduling a fetch`() {
+    val callback = mock<FetchedAppGateKeepersManager.Callback>()
+    val pendingCallbacks = Whitebox.getInternalState<
+        ConcurrentLinkedQueue<FetchedAppGateKeepersManager.Callback>>(
+        FetchedAppGateKeepersManager::class.java, "callbacks")
+    try {
+      whenever(FacebookSdk.getApplicationId()).thenAnswer { null }
+      FetchedAppGateKeepersManager.loadAppGateKeepersAsync(callback)
+      assertThat(pendingCallbacks).contains(callback)
+      assertThat(asyncTaskExecutedTimes).isEqualTo(0)
+      pendingCallbacks.remove(callback)
+
+      whenever(FacebookSdk.getApplicationId()).thenReturn(APPLICATION_NAME)
+      whenever(FacebookSdk.getApplicationContext()).thenAnswer { null }
+      FetchedAppGateKeepersManager.loadAppGateKeepersAsync(callback)
+      assertThat(pendingCallbacks).contains(callback)
+      assertThat(asyncTaskExecutedTimes).isEqualTo(0)
+    } finally {
+      pendingCallbacks.remove(callback)
+      whenever(FacebookSdk.getApplicationId()).thenReturn(APPLICATION_NAME)
+      whenever(FacebookSdk.getApplicationContext())
+          .thenReturn(ApplicationProvider.getApplicationContext())
+    }
+  }
+
+  @Test
+  fun `reset before SDK initialization does not resolve an application id`() {
+    whenever(FacebookSdk.isInitialized()).thenReturn(false)
+    whenever(FacebookSdk.getApplicationId()).thenThrow(IllegalStateException("SDK not initialized"))
+
+    FetchedAppGateKeepersManager.resetRuntimeGateKeeperCache()
   }
 
   @Test
