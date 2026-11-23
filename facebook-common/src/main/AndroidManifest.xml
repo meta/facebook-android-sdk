@@ -11,6 +11,9 @@
 
     <queries>
         <package android:name="com.facebook.katana" />
+        <!-- Makes Instagram visible to the host app on API 30+. Needed by AndroidLvaEligibility;
+             not gated by the LVA gate. Opt out with tools:node="remove". -->
+        <package android:name="com.instagram.android" />
     </queries>
 
     <application>
